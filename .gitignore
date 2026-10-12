@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Local Treble data: project registry, audit/outcome logs, Von server log.
+# Example procedures shared with the repo live in procedures/examples/ instead.
+.treble/
+
+# Test / coverage output
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/

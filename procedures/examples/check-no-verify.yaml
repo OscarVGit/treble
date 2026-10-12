@@ -1,0 +1,16 @@
+name: check-no-verify
+description: Run project checks without verification
+executable: pnpm
+args:
+  - run
+  - check
+  - --no-verify
+aliases:
+  - check-fast
+risk: read-only
+scope: project
+verify:
+  expected_exit_code: 0
+provenance:
+  source: manual
+  approved: true

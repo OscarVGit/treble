@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "treble"
+version = "0.1.0"
+description = "A decision-driven command execution harness"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "typer>=0.9",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "jsonschema>=4",
+    "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+treble = "treble.cli.main:main"
+treble-add = "treble.cli.add:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/treble"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# B008: Typer's idiom is function calls in argument defaults.
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["treble"]
+mypy_path = "src"

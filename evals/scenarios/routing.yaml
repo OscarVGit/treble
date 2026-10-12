@@ -1,0 +1,80 @@
+# Routing evaluation scenarios for the Von decision model.
+#
+# Each case lists the raw intent tokens, a fixture registry, and the expected
+# routing outcome in the action vocabulary. Run against a live Von server
+# (default) or offline with `--fake`.
+
+cases:
+  - name: bare-name-unique-registry
+    intent: [hello]
+    procedures:
+      - name: hello
+        description: Say hello
+        executable: echo
+        args: [hello]
+      - name: build
+        description: Build the project
+        executable: pnpm
+        args: [run, build]
+    expect: select:hello
+
+  - name: select-no-verify-variant
+    intent: [pnpm, run, check, without, verification]
+    procedures:
+      - name: check
+        description: Run project checks
+        executable: pnpm
+        args: [run, check]
+      - name: check-no-verify
+        description: Run project checks without verification
+        executable: pnpm
+        args: [run, check, --no-verify]
+    expect: select:check-no-verify
+
+  - name: bare-name-near-duplicates-clarify
+    intent: [check]
+    procedures:
+      - name: check
+        description: Run project checks
+        executable: pnpm
+        args: [run, check]
+      - name: check-no-verify
+        description: Run project checks without verification
+        executable: pnpm
+        args: [run, check, --no-verify]
+    expect: clarify
+
+  - name: list-procedures
+    intent: [list, all, my, procedures]
+    procedures:
+      - name: check
+        description: Run project checks
+        executable: pnpm
+        args: [run, check]
+    expect: list
+
+  - name: remove-procedure
+    intent: [remove, the, check, procedure]
+    procedures:
+      - name: check
+        description: Run project checks
+        executable: pnpm
+        args: [run, check]
+      - name: check-no-verify
+        description: Run project checks without verification
+        executable: pnpm
+        args: [run, check, --no-verify]
+      - name: build
+        description: Build the project
+        executable: pnpm
+        args: [run, build]
+    expect: remove:check
+
+  - name: escalate-unrelated
+    intent: [what, is, the, weather, today]
+    procedures:
+      - name: check
+        description: Run project checks
+        executable: pnpm
+        args: [run, check]
+    expect: escalate

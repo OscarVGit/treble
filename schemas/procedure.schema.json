@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://treble.dev/schemas/procedure.schema.json",
+  "title": "Treble Procedure",
+  "type": "object",
+  "required": ["name", "description", "executable"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "description": "Unique identifier; no whitespace."
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "executable": { "type": "string", "minLength": 1 },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "aliases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "risk": {
+      "type": "string",
+      "enum": ["read-only", "mutating", "destructive"],
+      "default": "read-only"
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["personal", "project"],
+      "default": "project"
+    },
+    "enabled": { "type": "boolean", "default": true },
+    "working_dir": { "type": "string" },
+    "env_vars": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "default": {}
+    },
+    "preconditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "executable": { "type": "string" },
+        "min_python_version": { "type": "string" },
+        "cwd_contains": { "type": "string" },
+        "env_vars_present": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expected_exit_code": { "type": "integer", "default": 0 },
+        "stdout_contains": { "type": "string" },
+        "stderr_empty": { "type": "boolean", "default": false },
+        "artifact_exists": { "type": "string" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "author": { "type": "string" },
+        "source": { "type": "string", "default": "manual" },
+        "version": { "type": "integer", "minimum": 1, "default": 1 },
+        "approved": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}
