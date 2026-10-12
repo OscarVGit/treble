@@ -22,21 +22,25 @@ python evals/run_eval.py evals/scenarios/routing.yaml --fake
 
 ## Current baseline (Von 1.3, 395M, local MPS)
 
-**Live: 5/6. Scripted: 6/6.** The one live miss is the case this suite
-exists to measure (README §11: "similar natural-language descriptions"):
+**Live: 4/6. Scripted: 6/6.** The two live misses share one root cause: the
+model cannot reliably discriminate procedures whose names/descriptions share
+a prefix (`check` vs `check-no-verify`), and it responds to those requests
+with a safe `clarify` rather than executing the wrong variant:
 
-- `remove-procedure` (`remove the check procedure`): with suffix-overlapping
-  names (`check` vs `check-no-verify`), the model confidently picks the wrong
-  variant (0.65 vs 0.16 — outside the ambiguity margin, so no clarification
-  is triggered). Fails safe at the runtime boundary: remove requires
-  interactive confirmation, where a human catches the mismatch.
+- `select-no-verify-variant` ("pnpm run check without verification") →
+  clarify between `check` and `check-no-verify`.
+- `remove-procedure` ("remove the check procedure") → clarify between the
+  same two.
 
-Routing decisions that previously drove clarification on near-duplicate
-procedure names are resolved by (a) a registry-grounded run gate biased
-toward run, and (b) procedure names embedded in the run-target option text,
-so a bare name like `hello` wins decisively over a verbose neighbour. On
-rounds where the top two options land within the 0.08 ambiguity margin the
-pipeline still clarifies rather than guessing.
+These are the "similar natural-language descriptions / ambiguous requests"
+cases the eval exists to measure (README §11). Both fail safe: no wrong
+command executes, and a mutating clarification can be confirmed by a human.
+
+Reliable behaviors in the current build: bare unique names route to the
+correct procedure (name embedded in the target option text); explicit
+management verbs (list/show/remove/add) classify at ~0.95+; unrelated
+requests escalate. When the run gate or the target Choice is at the
+discrimination boundary, Treble clarifies rather than guessing.
 
 Likely levers to raise the baseline: richer procedure descriptions with
 alias phrases, a Noul confirmation gate before executing close calls, or a

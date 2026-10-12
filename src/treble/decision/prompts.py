@@ -37,9 +37,8 @@ RUN_GATE_CONDITION = (
 
 # Stage-2 (run path): which procedure to execute.
 _RUN_TARGET_INSTRUCTIONS = (
-    "The developer wants to run one of the registered procedures listed in "
-    "the state. Which one should run? Choose 'none-of-the-above' if none of "
-    "them fit the request."
+    "Which registered procedure does this request refer to? Select the "
+    "procedure exactly named or most clearly described by the request."
 )
 
 # Stage-2 (control path): which management verb.
@@ -130,7 +129,14 @@ def control_verb_instructions() -> str:
 
 
 def build_control_target_options(procedures: list[Procedure]) -> dict[str, str]:
-    options = {p.name: p.description for p in procedures}
+    """Control-path target options: name embedded in the description text.
+
+    Same rationale as the run-target options: Von attends to description text
+    far more than to option keys, so repeating the name grounds a literal
+    name in a management request ("remove the hello procedure") against the
+    right procedure instead of a verbose neighbour.
+    """
+    options = {p.name: f"{p.name}: {p.description}" for p in procedures}
     options[NONE_OF_THE_ABOVE] = "None of the registered procedures is the target"
     return options
 

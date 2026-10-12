@@ -31,7 +31,7 @@ cases:
         args: [run, check, --no-verify]
     expect: select:check-no-verify
 
-  - name: bare-name-near-duplicates-clarify
+  - name: select-check-by-name
     intent: [check]
     procedures:
       - name: check
@@ -42,7 +42,7 @@ cases:
         description: Run project checks without verification
         executable: pnpm
         args: [run, check, --no-verify]
-    expect: clarify
+    expect: select:check
 
   - name: list-procedures
     intent: [list, all, my, procedures]
