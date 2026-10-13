@@ -1,7 +1,7 @@
 """Treble configuration loading.
 
 Configuration precedence (highest to lowest):
-1. ``TREBLE_VON_URL`` environment variable.
+1. Environment variables (``TREBLE_VON_URL``, ``TREBLE_VARIANT``).
 2. ``~/.treble/config.toml`` → ``[decision].base_url``.
 3. Built-in default ``http://127.0.0.1:8765/v1/systemone``.
 """
@@ -15,6 +15,8 @@ from pathlib import Path
 
 DEFAULT_VON_BASE_URL: str = "http://127.0.0.1:8765/v1/systemone"
 TREBLE_VON_URL_ENV: str = "TREBLE_VON_URL"
+TREBLE_VARIANT_ENV: str = "TREBLE_VARIANT"
+DEFAULT_VARIANT_NAME: str = "default"
 
 
 def user_config_dir() -> Path:
@@ -33,6 +35,7 @@ class TrebleConfig:
 
     von_base_url: str = DEFAULT_VON_BASE_URL
     von_timeout_s: float = 5.0
+    variant: str = DEFAULT_VARIANT_NAME
 
     @classmethod
     def load(cls, cwd: Path | None = None) -> TrebleConfig:
@@ -48,4 +51,5 @@ class TrebleConfig:
         base_url = os.environ.get(TREBLE_VON_URL_ENV) or str(
             file_cfg.get("base_url", DEFAULT_VON_BASE_URL)
         )
-        return cls(von_base_url=base_url)
+        variant = os.environ.get(TREBLE_VARIANT_ENV) or DEFAULT_VARIANT_NAME
+        return cls(von_base_url=base_url, variant=variant)

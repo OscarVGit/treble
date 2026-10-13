@@ -180,14 +180,55 @@ def test_low_winning_probability_clarifies(check_proc: Procedure) -> None:
     assert outcome.options  # exposed for the caller to format
 
 
-def test_close_top_two_clarifies(
+def test_close_top_two_clarifies_when_showdown_rejects(
     check_proc: Procedure, check_no_verify_proc: Procedure
 ) -> None:
     procs = [check_proc, check_no_verify_proc]
     options = build_run_target_options(procs)
     probs = {k: 0.01 for k in options}
     probs["check"] = 0.5
-    probs["check-no-verify"] = 0.45  # within margin 0.12 of 0.5
-    client = FakeSystemOneClient(noul_probability=0.9, answer=make_answer("check", probs))
+    probs["check-no-verify"] = 0.45  # within margin
+    # gate=run (0.9), showdown Noul rejects top pick (0.1 -> abandon)
+    client = FakeSystemOneClient(
+        noul_series=[0.9, 0.1], answer=make_answer("check", probs)
+    )
     outcome = decide(["check"], procs, client, ambiguity_margin=0.12)
     assert outcome.action is Action.CLARIFY
+
+
+def test_showdown_noul_confirms_pick(
+    check_proc: Procedure, check_no_verify_proc: Procedure
+) -> None:
+    procs = [check_proc, check_no_verify_proc]
+    options = build_run_target_options(procs)
+    probs = {k: 0.01 for k in options}
+    probs["check"] = 0.5
+    probs["check-no-verify"] = 0.45  # within margin
+    # showdown Noul clearly confirms the top pick -> execute, no user gate.
+    client = FakeSystemOneClient(
+        noul_series=[0.9, 0.85], answer=make_answer("check", probs)
+    )
+    outcome = decide(["check"], procs, client, ambiguity_margin=0.12)
+    assert outcome.action is Action.SELECT_PROCEDURE
+    assert outcome.target_name == "check"
+    assert outcome.confirm is False
+    assert outcome.runner_up == "check-no-verify"
+
+
+def test_showdown_noul_unsure_requires_confirmation(
+    check_proc: Procedure, check_no_verify_proc: Procedure
+) -> None:
+    procs = [check_proc, check_no_verify_proc]
+    options = build_run_target_options(procs)
+    probs = {k: 0.01 for k in options}
+    probs["check"] = 0.5
+    probs["check-no-verify"] = 0.45  # within margin
+    # showdown Noul is unsure -> keep the pick but ask the user to confirm.
+    client = FakeSystemOneClient(
+        noul_series=[0.9, 0.45], answer=make_answer("check", probs)
+    )
+    outcome = decide(["check"], procs, client, ambiguity_margin=0.12)
+    assert outcome.action is Action.SELECT_PROCEDURE
+    assert outcome.target_name == "check"
+    assert outcome.confirm is True
+    assert outcome.runner_up == "check-no-verify"

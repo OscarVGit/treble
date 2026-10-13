@@ -10,6 +10,7 @@ import pytest
 from treble.cli.commands._pipeline import (
     EXIT_CLARIFY,
     EXIT_DENIED,
+    EXIT_FAILED,
     EXIT_NEEDS_DECISION,
     EXIT_OK,
     EXIT_VON_UNAVAILABLE,
@@ -62,12 +63,35 @@ def test_von_unreachable_fails_closed(
 
 
 def test_no_regex_fallback(store: ProcedureStore, echo_proc: Procedure, project_cwd: Path) -> None:
-    """An exact procedure name still routes through Von (no deterministic shortcut)."""
+    """A bare procedure name still routes through Von (no deterministic shortcut)."""
     store.add(echo_proc)
     client = _run_client([echo_proc], "echo-hello")
-    rc = run_pipeline(["echo-hello", "--dry-run"], cwd=project_cwd, client=client)
+    rc = run_pipeline(["echo-hello"], cwd=project_cwd, client=client)
     assert rc == EXIT_OK
     assert client.calls and client.calls[0][0] == "judge"  # Von was consulted first
+
+
+def test_forwarding_runs_extra_args_without_von(
+    store: ProcedureStore, project_cwd: Path, capsys
+) -> None:
+    """Name + flag-like extras is deterministic forwarding; Von is not consulted."""
+    from treble.registry import Procedure
+
+    store.add(
+        Procedure(
+            name="list-files",
+            description="List files",
+            executable="echo",
+            args=["files:"],
+        )
+    )
+    client = FakeSystemOneClient()  # would raise if consulted
+    rc = run_pipeline(
+        ["list-files", "--watch"], cwd=project_cwd, client=client
+    )
+    assert rc == EXIT_OK
+    assert "files: --watch" in capsys.readouterr().out
+    assert not client.calls
 
 
 # -- SELECT / run ------------------------------------------------------------
@@ -210,11 +234,61 @@ def test_clarify_prints_alternatives(
     probs = {k: 0.01 for k in options}
     probs["check"] = 0.5
     probs["check-no-verify"] = 0.45  # within margin
-    client = FakeSystemOneClient(noul_probability=0.9, answer=make_answer("check", probs))
+    # gate=run, showdown Noul rejects top pick (0.1 -> abandon -> CLARIFY)
+    client = FakeSystemOneClient(noul_series=[0.9, 0.1], answer=make_answer("check", probs))
     rc = run_pipeline(["check"], cwd=project_cwd, client=client)
     out = capsys.readouterr().out
     assert rc == EXIT_CLARIFY
     assert "ambiguous request" in out
+
+
+def test_showdown_unsure_asks_user_to_confirm(
+    store: ProcedureStore,
+    check_proc: Procedure,
+    check_no_verify_proc: Procedure,
+    project_cwd: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    """Near-tied pick that the showdown Noul is unsure about: the user is
+    asked to confirm before execution."""
+
+    store.add(check_proc)  # check = pnpm run check (won't run here: dry-run avoids it)
+    procs = [check_proc]
+    options = build_run_target_options(procs)
+    probs = {k: 0.01 for k in options}
+    probs["check"] = 0.5
+    probs["check-no-verify"] = 0.45  # within margin
+    # gate=run, showdown Noul unsure (0.45 -> confirm, don't clarify)
+    client = FakeSystemOneClient(noul_series=[0.9, 0.45], answer=make_answer("check", probs))
+    monkeypatch.setattr("typer.confirm", lambda prompt: True)  # user approves
+    rc = run_pipeline(["check"], cwd=project_cwd, dry_run=True, client=client)
+    out = capsys.readouterr().out
+    assert rc == EXIT_OK
+    assert "[dry-run] would execute: pnpm run check" in out
+
+
+def test_missing_executable_reports_actionable_message(
+    store: ProcedureStore, project_cwd: Path, capsys
+) -> None:
+    from treble.registry import Procedure as Proc
+
+    store.add(
+        Proc(
+            name="missing",
+            description="runs a binary that does not exist",
+            executable="definitely-not-a-real-binary",
+        )
+    )
+    client = FakeSystemOneClient(
+        noul_series=[0.9],  # gate only: bare name, single option, no showdown
+        answer=make_answer("missing", {"missing": 0.99, "none-of-the-above": 0.01}),
+    )
+    rc = run_pipeline(["missing"], cwd=project_cwd, client=client)
+    err = capsys.readouterr().err
+    assert rc == EXIT_FAILED
+    assert "was not found on PATH" in err
+    assert "definitely-not-a-real-binary" in err
 
 
 def test_escalate_when_none_of_the_above(

@@ -16,6 +16,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Eval run captures (baselines recorded in EVALUATION.md)
+evals/results/
+
 # OS and editor noise
 .DS_Store
 .idea/

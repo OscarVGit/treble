@@ -11,6 +11,7 @@ import sys
 import typer
 
 from treble.cli.commands import add_cmd, explain, list_cmd, remove, show, test_cmd
+from treble.registry import RegistryError
 
 _KNOWN_SUBCOMMANDS = {"add", "list", "show", "explain", "test", "remove", "run"}
 
@@ -43,35 +44,41 @@ def run_command(
     yes: bool = typer.Option(False, "--yes", "-y"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
-    """Execute the procedure best matching the intent."""
-    tokens, extra_yes, extra_dry_run = _extract_flags([*intent, *ctx.args])
+    """Execute the procedure best matching the intent.
+
+    Flags are positional: ``--yes``/``--dry-run`` before the intent are
+    Treble's; every token after the identifier is forwarded to the command.
+    """
+    tokens = [*intent, *ctx.args]
     from treble.cli.commands._pipeline import run_pipeline
 
-    raise typer.Exit(
-        run_pipeline(tokens, dry_run=dry_run or extra_dry_run, assume_yes=yes or extra_yes)
-    )
+    raise typer.Exit(run_pipeline(tokens, dry_run=dry_run, assume_yes=yes))
 
 
-def _extract_flags(tokens: list[str]) -> tuple[list[str], bool, bool]:
-    """Pull ``--yes``/``--dry-run`` out of trailing intent tokens."""
-    yes = dry_run = False
-    kept: list[str] = []
-    for token in tokens:
-        if token in ("--yes", "-y"):
-            yes = True
-        elif token == "--dry-run":
-            dry_run = True
-        else:
-            kept.append(token)
-    return kept, yes, dry_run
-
+# Treble's own global flags. They are only recognised *before* the first
+# positional token (the procedure identifier). Ownership is positional:
+# everything before the identifier is Treble's, everything after it belongs
+# to the command — so there is no reserved-word escaping at all.
+GLOBAL_FLAGS = {"--dry-run", "--yes", "-y"}
 
 # Sub-commands that take exactly one positional name and no options.
 _ONE_ARG_SUBCOMMANDS = {"show", "explain", "remove"}
 # Flags the literal ``test`` sub-command owns.
 _TEST_FLAGS = {"-y", "--yes", "--dry-run"}
 # Flags that mark an ``add`` invocation as the literal registration call.
-_ADD_FLAGS = {"--name", "-n", "--command", "--description", "-d"}
+_ADD_FLAGS = {"--name", "-n", "--command", "--description", "-d", "--alias", "-a"}
+
+
+def _split_leading_flags(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split ``argv`` into (leading flag tokens, remaining args).
+
+    Splits on token form (``-``-prefixed), not on known flags, so unknown
+    leading flags can be reported as errors instead of leaking to Von.
+    """
+    i = 0
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 1
+    return argv[:i], argv[i:]
 
 
 def _is_literal_invocation(argv: list[str]) -> bool:
@@ -104,14 +111,54 @@ def main() -> None:
     natural-language requests that happen to start with a sub-command word)
     is routed through Von via ``run``.
     """
+    try:
+        _dispatch_main()
+    except RegistryError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(1) from None
+
+
+def _dispatch_main() -> None:
     argv = sys.argv[1:]
-    if not argv or argv[0].startswith("-") or argv[0] == "run":
+    if not argv:
+        app()
+        return
+
+    # Standard app options bypass global-flag handling.
+    if argv[0] in ("--help", "-h", "--version"):
+        app()
+        return
+
+    global_flags: list[str] = []
+    if argv[0].startswith("-"):
+        flags, rest = _split_leading_flags(argv)
+        unknown = [f for f in flags if f not in GLOBAL_FLAGS]
+        if unknown:
+            typer.secho(
+                f"unknown Treble option {unknown[0]!r}; flags for the command "
+                "belong after the procedure name",
+                fg="red",
+                err=True,
+            )
+            raise SystemExit(2)
+        global_flags = flags
+        if not rest:
+            app()
+            return
+        argv = rest
+
+    if argv[0] == "run":
+        # Globals drained: reinsert them as run's options before the intent.
+        sys.argv = [sys.argv[0], "run", *global_flags, *argv[1:]]
         app()
         return
     if argv[0] in _KNOWN_SUBCOMMANDS and _is_literal_invocation(argv):
+        # Literal control-plane sub-command: drop global flags (they are
+        # meaningful only on the run path).
+        sys.argv = [sys.argv[0], *argv]
         app()
         return
-    sys.argv = [sys.argv[0], "run", *argv]
+    sys.argv = [sys.argv[0], "run", *global_flags, *argv]
     app()
 
 

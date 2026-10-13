@@ -40,13 +40,15 @@ def execute(
     procedure: Procedure,
     cwd: Path | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    extra_args: list[str] | None = None,
 ) -> ExecutionResult:
     """Run a procedure and capture its result.
 
-    The procedure's ``args`` are passed as-is; nothing goes through a
-    shell. Working directory and environment are applied deterministically.
+    The procedure's ``args`` are passed as-is, followed by any ``extra_args``
+    the user appended at call time. Nothing goes through a shell; working
+    directory and environment are applied deterministically.
     """
-    argv = procedure.invocation()
+    argv = [*procedure.invocation(), *(extra_args or [])]
     working_dir = Path(procedure.working_dir) if procedure.working_dir else (cwd or Path.cwd())
     extra_env = dict(procedure.env_vars)
     env = build_environment(extra_env)

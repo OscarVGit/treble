@@ -74,6 +74,24 @@ class Procedure(BaseModel):
         if not value or any(ch.isspace() for ch in value):
             msg = "procedure name must be non-empty and contain no whitespace"
             raise ValueError(msg)
+        if value.startswith("-"):
+            msg = (
+                "procedure name must not start with '-': it would collide with "
+                "the positional flag-ownership rule (leading flags are Treble's)"
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aliases")
+    @classmethod
+    def _valid_aliases(cls, value: list[str]) -> list[str]:
+        for alias in value:
+            if alias.startswith("-"):
+                msg = (
+                    f"alias {alias!r} must not start with '-': it would collide "
+                    "with the positional flag-ownership rule"
+                )
+                raise ValueError(msg)
         return value
 
     @field_validator("env_vars")

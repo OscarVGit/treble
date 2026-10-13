@@ -11,7 +11,13 @@ from pathlib import Path
 
 import typer
 
-from treble.registry import Procedure, ProcedureStore, RiskLevel, Scope
+from treble.registry import (
+    DuplicateProcedure,
+    Procedure,
+    ProcedureStore,
+    RiskLevel,
+    Scope,
+)
 
 app = typer.Typer(
     name="treble-add",
@@ -28,6 +34,7 @@ def register(
     description: str,
     scope: Scope,
     risk: RiskLevel,
+    aliases: list[str] | None = None,
     cwd: Path | None = None,
     overwrite: bool = False,
 ) -> Path:
@@ -43,6 +50,7 @@ def register(
         args=argv[1:],
         scope=scope,
         risk=risk,
+        aliases=aliases or [],
     )
     return ProcedureStore(cwd).add(procedure, overwrite=overwrite)
 
@@ -54,15 +62,26 @@ def main(
     description: str = typer.Option(..., "--description", "-d", help="What this procedure does."),
     scope: Scope = typer.Option(Scope.PROJECT, "--scope", "-s", help="Where to store it."),
     risk: RiskLevel = typer.Option(RiskLevel.READ_ONLY, "--risk", "-r", help="Side-effect level."),
+    alias: list[str] = typer.Option([], "--alias", "-a", help="Alternative name (repeatable)."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing procedure."),
 ) -> None:
     """Register a procedure under the current project (or personal scope)."""
-    path = register(
-        name=name,
-        command=command,
-        description=description,
-        scope=scope,
-        risk=risk,
-        overwrite=overwrite,
-    )
+    try:
+        path = register(
+            name=name,
+            command=command,
+            description=description,
+            scope=scope,
+            risk=risk,
+            aliases=alias,
+            overwrite=overwrite,
+        )
+    except DuplicateProcedure:
+        typer.secho(
+            f"a procedure named {name!r} already exists. "
+            "Re-run with --overwrite to replace it, or pick another name.",
+            fg="yellow",
+            err=True,
+        )
+        raise typer.Exit(1) from None
     typer.echo(f"registered {name!r} → {path}")

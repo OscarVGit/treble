@@ -9,7 +9,6 @@ from typer.testing import CliRunner
 
 from treble.cli.add import app as add_app
 from treble.cli.main import app as main_app
-from treble.cli.parser import parse_invocation
 from treble.decision.prompts import build_run_target_options
 from treble.decision.testing import FakeSystemOneClient, make_answer
 from treble.registry import ProcedureStore
@@ -34,13 +33,6 @@ def _select_client(store: ProcedureStore, name: str) -> FakeSystemOneClient:
 # -- parser -----------------------------------------------------------------
 
 
-def test_parse_invocation_splits_flags_and_tokens() -> None:
-    parsed = parse_invocation(["--dry-run", "--yes", "pnpm", "run", "check"])
-    assert parsed.tokens == ["pnpm", "run", "check"]
-    assert parsed.dry_run
-    assert parsed.assume_yes
-
-
 # -- dispatcher: literal vs Von-routed ----------------------------------------
 
 
@@ -61,13 +53,6 @@ def test_literal_invocation_detection() -> None:
     assert not _is_literal_invocation(["add", "a", "procedure"])
 
 
-def test_parse_invocation_passthrough_after_double_dash() -> None:
-    parsed = parse_invocation(["run", "--", "--verbose", "-n", "1"])
-    assert parsed.tokens == ["run"]
-    assert parsed.passthrough == ["--verbose", "-n", "1"]
-    assert not parsed.verbose
-
-
 # -- treble-add (deterministic bootstrap; no Von) ----------------------------
 
 
@@ -82,6 +67,30 @@ def test_add_registers_procedure(project_cwd: Path) -> None:
 def test_add_rejects_empty_command(project_cwd: Path) -> None:
     result = runner.invoke(add_app, ["   ", "--name", "x", "--description", "y"])
     assert result.exit_code != 0
+
+
+def test_add_duplicate_prints_clean_error(project_cwd: Path) -> None:
+    first = runner.invoke(
+        add_app, ["echo hello", "--name", "hello", "--description", "Say hello"]
+    )
+    assert first.exit_code == 0
+    second = runner.invoke(
+        add_app, ["echo bye", "--name", "hello", "--description", "Say goodbye"]
+    )
+    assert second.exit_code == 1
+    assert "Traceback" not in second.output
+    assert "already exists" in second.output
+    assert "overwrite" in second.output
+
+
+def test_add_duplicate_with_overwrite(project_cwd: Path) -> None:
+    runner.invoke(add_app, ["echo hello", "--name", "hello", "--description", "Say hello"])
+    result = runner.invoke(
+        add_app,
+        ["echo bye", "--name", "hello", "--description", "Say goodbye", "--overwrite"],
+    )
+    assert result.exit_code == 0
+    assert "registered" in result.output
 
 
 # -- literal deterministic subcommands (no Von) ------------------------------
@@ -149,12 +158,58 @@ def test_run_executes_via_von(project_cwd: Path, monkeypatch: pytest.MonkeyPatch
 
 
 def test_run_dry_run_via_von(project_cwd: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--dry-run`` before the intent is Treble's (positional ownership)."""
     _register(project_cwd)
     client = _select_client(ProcedureStore(project_cwd), "hello")
     _patch_von(monkeypatch, client)
-    result = runner.invoke(main_app, ["run", "hello", "--dry-run"])
+    result = runner.invoke(main_app, ["run", "--dry-run", "hello"])
     assert result.exit_code == 0
     assert "[dry-run] would execute: echo hello" in result.output
+
+
+def test_leading_global_flag_dispatcher(
+    project_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`treble --dry-run run hello` treats the leading flag as Treble's."""
+    _register(project_cwd)
+    client = _select_client(ProcedureStore(project_cwd), "hello")
+    _patch_von(monkeypatch, client)
+    import sys
+
+    from treble.cli.main import main
+
+    original = sys.argv
+    try:
+        sys.argv = ["treble", "--dry-run", "run", "hello"]
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code in (0, None)
+    finally:
+        sys.argv = original
+
+
+def test_unknown_leading_flag_errors(project_cwd: Path, capsys) -> None:
+    import sys
+
+    from treble.cli.main import main
+
+    original = sys.argv
+    try:
+        sys.argv = ["treble", "--watch", "hello"]
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+    finally:
+        sys.argv = original
+    assert "unknown Treble option '--watch'" in capsys.readouterr().err
+
+
+def test_trailing_flag_is_forwarded_to_command(project_cwd: Path) -> None:
+    """`treble hello --verbose` is the command's flag, not Treble's."""
+    _register(project_cwd)
+    result = runner.invoke(main_app, ["run", "hello", "--verbose"])
+    assert result.exit_code == 0
+    assert "hello --verbose" in result.output
 
 
 def test_run_fails_closed_when_von_down(
@@ -167,7 +222,7 @@ def test_run_fails_closed_when_von_down(
     _patch_von(monkeypatch, client)
     result = runner.invoke(main_app, ["run", "hello"])
     assert result.exit_code == 6
-    assert "Von decision model is unreachable" in result.output
+    assert "Treble's decision service is unreachable" in result.output
 
 
 def test_bare_intent_dispatches_to_run(

@@ -35,6 +35,7 @@ class FakeSystemOneClient:
     noul_probability: float = 1.0
     answer: ChoiceAnswer | None = None
     answers: list[ChoiceAnswer] | None = None
+    noul_series: list[float] | None = None  # consumed one per judge call
     error: Exception | None = None
     calls: list[tuple[str, str, object]] = field(default_factory=list)
 
@@ -42,6 +43,9 @@ class FakeSystemOneClient:
         self.calls.append(("judge", state, question))
         if self.error is not None:
             raise self.error
+        if self.noul_series:
+            prob = self.noul_series.pop(0)
+            return NoulAnswer(noul=prob, noul_raw=prob)
         return NoulAnswer(noul=self.noul_probability, noul_raw=self.noul_probability)
 
     def choose(self, state: str, question: ChoiceQuestion) -> ChoiceAnswer:

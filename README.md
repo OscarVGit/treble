@@ -1,8 +1,11 @@
 # Treble — A Decision-Driven Command Execution Harness
 
-**Status:** Project proposal / MVP specification
+**Status:** Implemented MVP (Milestones 1–2 of the proposal below)
 **Working name:** Treble
-**Primary implementation language:** Python
+**Primary implementation language:** Python (requires ≥ 3.11)
+**Runtime dependency:** the local Von decision-model server (open-source
+`von` weights served over `http://127.0.0.1:8765/v1/systemone`); Treble fails
+closed when Von is unreachable
 **Core principle:** Deterministic execution, decision-model routing, LLM-assisted exception handling.
 
 ## 1. Overview
@@ -49,7 +52,45 @@ treble pnpm run check without verification
 
 Treble resolves the request against its registered procedures and selects the appropriate execution path.
 
-If the intent is ambiguous, Treble should ask for clarification rather than silently choose a potentially destructive or incorrect command.
+If the intent is ambiguous, Treble asks for clarification rather than
+silently choosing a potentially destructive or incorrect command — or fails
+closed if the decision service is unreachable.
+
+### 1.1 Implementation status
+
+The sections below describe the target product. What is **currently built**
+(the "implemented MVP"):
+
+- **Python CLI** (`treble`, `treble-add`) with literal sub-commands
+  (`list`, `show NAME`, `explain NAME`, `test NAME`, `remove NAME`, `add`)
+  and dynamic dispatch.
+- **YAML procedure registry** in `./.treble/procedures/` (project) and
+  `~/.treble/procedures/` (personal), validated against a JSON Schema.
+  Procedures carry names, aliases, descriptions, command vectors, risk,
+  scope, and verification rules. Names/aliases may not start with `-`.
+- **Von-first routing** (Milestone 2): every free-form request runs through
+  the decision model — run gate (Noul) + target/control Choices — with
+  confidence/margin gates that clarify rather than guess, a Noul
+  "showdown" confirmation for near-tied picks, and fail-closed behaviour
+  when Von is down.
+- **Argument forwarding** (deterministic, §5 Layer 1): calling a registered
+  name/alias/command with trailing flags runs the stored argv plus those
+  flags, with no model call.
+- **Positional flag ownership**: flags before the identifier are Treble's
+  (`--dry-run`, `--yes`); everything after belongs to the command.
+- **Safe runtime**: no shell interpolation, risk-gated confirmation,
+  timeouts, post-execution verification, redacted JSONL audit and outcome
+  logs, and actionable failure messages (missing executable, ENOENT).
+- **Test/eval harness**: `pytest` (unit + integration),
+  `scripts/smoke_test.sh` (end-to-end CLI), and a confusion-matrix eval
+  suite (`evals/run_eval.py`) with safety/actionability metrics, JSONL
+  result capture, and A/B prompt variants; see `EVALUATION.md` for the
+  first measured comparison.
+
+**Not yet built** (deferred): LLM-assisted procedure authoring (Layer 6 is an
+interface stub), team-shared registries, environment-precondition
+*enforcement* (kept as utilities), daemon, marketplace, and cross-machine
+sync. See §9/§10.
 
 ## 2. The problem
 
@@ -86,28 +127,38 @@ Treble is not intended to be a general-purpose autonomous shell agent. Its defau
 
 ### 4.1 Register a procedure
 
-A developer registers an exact command and gives it a human-readable description.
+A developer registers an exact command (positional) and gives it a
+human-readable description, optional aliases, scope and risk:
 
 ```bash
-treble-add \
+treble-add "pnpm run check --no-verify" \
   --name check-no-verify \
-  --command "pnpm run check --no-verify" \
   --description "Run checks without verification"
+treble-add "npm run test" \
+  --name test \
+  --description "Run the test suite" \
+  --alias tests          # repeatable; -a tests --alias suite
+# Optional: --scope project|personal, --risk read-only|mutating|destructive,
+#           --overwrite to replace an existing procedure of the same name.
 ```
 
-Registration should capture:
+The equivalent `treble add "<command>" --name ...` exists in the `treble`
+CLI. Registration captures:
 
 - Procedure name and natural-language description.
-- Exact executable and argument list.
-- Working-directory requirements.
-- Environment and runtime preconditions.
-- Optional environment variables, excluding secret values from stored metadata.
-- Expected exit codes and verification checks.
-- Whether the procedure is read-only, mutating or potentially destructive.
-- Scope: personal, project-local or team-shared.
-- Version and invalidation conditions.
+- Exact executable and argument list (no shell-string re-parsing at run).
+- Optional aliases; aliases are full alternate identifiers.
+- Optional working-directory, environment and precondition metadata.
+- Expected exit codes and post-execution verification checks.
+- Risk level (read-only, mutating, destructive) that drives confirmation.
+- Scope: personal (`~/.treble/`) or project (`./.treble/`).
+- `enabled` flag (default true) for invalidation/disablement.
 
-The initial MVP should support explicit command registration. Automatically generating procedures can follow later.
+Names and aliases may not start with `-` (enforced at registration) so the
+positional flag-ownership boundary is unambiguous.
+
+The initial MVP supports explicit command registration. Automatically
+generating procedures is deferred (Layer 6 / Milestone 4).
 
 ### 4.2 Execute a registered procedure
 
@@ -121,27 +172,28 @@ Or use the underlying command as the entry point:
 treble pnpm run check without verification
 ```
 
-The second example requires semantic resolution. Treble identifies the underlying command, interprets the additional constraint and selects the matching registered procedure.
-
-If the request matches exactly one approved procedure, Treble can execute it directly, subject to its configured safety policy.
-
-If several procedures match, it should ask the user to choose.
-
-If none match, it should explain that it does not have a suitable registered procedure.
+Resolution order: deterministic **argument forwarding** first (a registered
+name/alias/command followed by trailing flags, §5 Layer 1), then **Von**
+routing for everything else. If the request references one approved
+procedure unambiguously, it runs subject to the safety policy. Ambiguous
+requests produce a clarification listing Von's top candidates rather than a
+silent choice; unrelated requests escalate.
 
 ### 4.3 Inspect and manage procedures
 
 ```bash
 treble list
 treble show check-no-verify
-treble explain "pnpm run check without verification"
-treble test check-no-verify
+treble explain check-no-verify     # NAME (not free-form intent)
+treble test check-no-verify        # run a named procedure directly, bypassing Von
 treble remove check-no-verify
+treble  # or the natural-language equivalents, e.g. "show me the build step"
 ```
 
-These commands should make the registry transparent and allow users to inspect what will actually run.
-
-`treble explain` is particularly important: users should be able to see why a procedure was selected, which conditions matched and which flags will be applied.
+These commands make the registry transparent so users can inspect exactly
+what will run. `treble explain NAME` prints the stored argv, working
+directory, risk and verification requirements; `treble test NAME` is the
+deterministic by-name execution path.
 
 ## 5. Architecture
 
@@ -170,6 +222,40 @@ tool's own commands deterministic and cheap while ensuring that every
 free-form message, including one that contains a Treble-level command, is
 resolved by the decision model.
 
+**Flag ownership is positional.** Flags *before* the procedure identifier
+are Treble's; every token *after* it belongs to the command. There are no
+reserved-word exceptions and no `--` escaping:
+
+```
+treble --dry-run check-no-verify        # Treble's plan, doesn't execute
+treble check-no-verify --dry-run        # command's flag, forwarded verbatim
+treble --yes check-no-verify --watch    # Treble auto-confirm; --watch forwarded
+```
+
+An unknown *leading* flag is an error rather than silently passed through:
+`treble --watch check` fails with `unknown Treble option '--watch'; flags
+for the command belong after the procedure name`. Procedure names and
+aliases may not start with `-` (enforced at registration) so the
+identifier boundary is unambiguous.
+
+**Argument forwarding.** When the leading tokens exactly reproduce a
+registered identifier — a name, an alias, or the procedure's full
+registered command — and the first trailing token is flag-like (starts
+with `-`, or is `key=value`), the request is executed deterministically
+with no Von call: the registered argv runs with the remaining tokens
+appended verbatim.
+
+```
+treble check-no-verify --watch     # pnpm run check --no-verify --watch
+treble cnv --attach                # alias match, same result
+treble pnpm run check --watch      # full command match
+```
+
+The first trailing token *not* being flag-like disables forwarding and
+sends the whole request to Von — which is what keeps the natural-language
+example `treble pnpm run check without verification` routing to
+`check-no-verify` instead of hijacking `check` with junk arguments.
+
 ### Layer 2 — Procedure registry
 
 Stores versioned execution procedures in a simple, inspectable format.
@@ -192,6 +278,12 @@ Treble does not use deterministic matching to *decide* which procedure to
 run. Every free-form request is routed through the decision model, including
 exact procedure names and verbatim commands.
 
+The single exception is **argument forwarding** (§5 Layer 1): when the
+leading tokens exactly reproduce a registered identifier and the first
+trailing token is flag-like, the stored argv runs with the trailing tokens
+appended. That is argument passing, not procedure selection — there is no
+decision to query the model for.
+
 This layer retains procedure metadata helpers (declared preconditions such
 as required executables or environment variables) as runtime utilities for
 diagnostics. They do not filter the option set handed to the decision
@@ -202,7 +294,9 @@ routing time.
 
 Von handles **every** incoming free-form request. There is no regex or
 exact-match short-circuit and no deterministic fallback: if Von is
-unreachable, Treble fails closed and reports that it cannot route.
+unreachable, Treble fails closed and reports that it cannot route. (The one
+non-model path, argument forwarding, runs the stored argv plus trailing
+flags — an argument-passing shortcut, not a routing fallback; §5 Layer 1.)
 
 Routing is decomposed into the primitives Von is strongest at:
 
@@ -224,6 +318,19 @@ A decision whose winning probability is below the confidence threshold, or
 whose top two options are within the ambiguity margin, falls back to
 clarification. `none-of-the-above` escalates.
 
+**Showdown gate.** When a run-target Choice lands *within* the ambiguity
+margin (a near-tie), Treble does not hard-clarify. It asks a confirmation
+Noul — "does the request really refer to the top pick, not the runner-up?"
+— and then acts on that answer:
+
+- Noul confident (`p ≥ 0.6`): execute the top pick normally.
+- Noul unsure (`0.3 ≤ p < 0.6`): execute the top pick, but **ask the user
+  to confirm** first (naming the runner-up) so a wrong pick is caught.
+- Noul rejects (`p < 0.3`): abandon to clarification.
+
+This turns the common "two similar procedures" failure mode into a
+checkable decision instead of a silent guess or a dead-end.
+
 The safety boundary is strict: Von *selects*; the runtime *enforces*.
 Mutating actions (add/remove) and any destructive procedure still pass
 through the confirmation and policy gates regardless of model confidence.
@@ -234,14 +341,20 @@ The runtime executes the selected procedure.
 
 It is responsible for:
 
-- Constructing the argument vector.
+- Constructing the argument vector (stored argv plus any forwarded extras).
 - Applying the intended working directory and approved environment configuration.
-- Checking preconditions.
-- Enforcing permissions and execution policies.
+- Checking declared preconditions (kept as utilities; not used to filter
+  the Von option set).
+- Enforcing permissions and execution policies (risk-gated confirmation
+  plus the showdown confirmation gate).
 - Capturing stdout, stderr and exit codes.
 - Applying timeouts and cancellation.
 - Running post-execution verification.
-- Recording an audit trail.
+- Recording a redacted, append-only audit trail.
+- Reporting common failures **actionably** — a missing executable (exit
+  127) suggests installing it or registering a different procedure, and an
+  `ENOENT` failure points at the working directory — instead of a bare
+  exit-code mismatch.
 
 Von selects the procedure; it does not override the runtime's permission checks.
 
@@ -349,17 +462,21 @@ The initial implementation should remain deliberately small.
 
 ### Include
 
-- Python CLI.
-- Local JSON or YAML procedure registry.
-- Exact command registration.
-- Named procedures and aliases.
-- Deterministic command matching.
-- Basic natural-language routing through Von.
-- Structured command execution and exit-code reporting.
-- Procedure preconditions and post-execution verification.
-- A dry-run or explain mode.
-- Safe handling of ambiguous requests.
-- A basic LLM fallback interface that proposes changes rather than automatically applying them.
+- Python CLI (`treble`, `treble-add`).
+- Local YAML procedure registry (directory-based, JSON-Schema validated).
+- Exact command registration with aliases, scope, risk and verify rules.
+- Deterministic execution paths: literal sub-commands and argument
+  forwarding of trailing flags onto a registered command.
+- Positional flag ownership (`--dry-run`/`--yes` before the identifier).
+- Natural-language routing through von (run gate + target/control Choices).
+- Structured execution, exit-code reporting and post-execution verification.
+- A dry-run / explain mode for inspecting the execution plan.
+- Safe handling of ambiguous requests (clarification) and fail-closed
+  behaviour when the decision service is unreachable.
+- A basic LLM fallback *interface* that proposes changes rather than
+  automatically applying them (not yet wired; Milestone 4).
+- An evaluation suite (`evals/run_eval.py`) and CLI smoke harness
+  (`scripts/smoke_test.sh`).
 
 ### Defer
 

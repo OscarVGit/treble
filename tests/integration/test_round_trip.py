@@ -78,8 +78,10 @@ def test_ambiguous_intent_clarifies(project_cwd: Path, monkeypatch: pytest.Monke
     options = build_run_target_options(store.list_all())
     probs = {k: 0.005 for k in options}
     probs["check"] = 0.5
-    probs["check-fast"] = 0.45  # within margin → CLARIFY
-    client = FakeSystemOneClient(noul_probability=0.9, answer=make_answer("check", probs))
+    probs["check-fast"] = 0.45  # within margin → showdown Noul rejects → CLARIFY
+    client = FakeSystemOneClient(
+        noul_series=[0.9, 0.1], answer=make_answer("check", probs)
+    )
     monkeypatch.setattr("treble.cli.commands._pipeline.default_client", lambda cfg: client)
 
     result = runner.invoke(main_app, ["run", "check", "quickly"])

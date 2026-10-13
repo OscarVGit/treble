@@ -27,6 +27,7 @@ from treble.decision.prompts import (
     NONE_OF_THE_ABOVE,
     TARGETED_VERBS,
     VERB_TO_ACTION,
+    Variant,
     build_control_target_options,
     build_control_verb_options,
     build_routing_state,
@@ -35,12 +36,12 @@ from treble.decision.prompts import (
     control_target_instructions,
     control_target_state,
     control_verb_instructions,
-    run_gate_condition,
-    run_target_instructions,
+    get_variant,
 )
 from treble.decision.protocol import (
     ChoiceAnswer,
     ChoiceQuestion,
+    NoulAnswer,
     NoulQuestion,
 )
 from treble.registry.models import Procedure
@@ -54,6 +55,13 @@ DEFAULT_AMBIGUITY_MARGIN: float = 0.08
 # the safety gates (confirmation for mutating/destructive procedures) cover a
 # borderline run that the user meant as a read-only inspection.
 RUN_GATE_THRESHOLD: float = 0.35
+# Showdown Noul: when the run-target Choice lands within the ambiguity margin,
+# the router asks Von whether the request is really about the top pick (and
+# not the runner-up). Above this (raw) probability the pick is trusted and
+# runs normally; below it, the pick is marked for user confirmation. Below
+# the abandon threshold the pick is dropped for clarification instead.
+SHOWDOWN_NOUL_TRUST: float = 0.6
+SHOWDOWN_ABANDON: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,8 @@ class DecisionOutcome:
     probabilities: dict[str, float] = field(default_factory=dict)
     options: dict[str, str] = field(default_factory=dict)
     reason: str = ""
+    runner_up: str | None = None  # the second-best candidate, if contested
+    confirm: bool = False  # ask the user to confirm before executing
 
 
 def decide(
@@ -76,19 +86,25 @@ def decide(
     cwd: Path | None = None,
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
     ambiguity_margin: float = DEFAULT_AMBIGUITY_MARGIN,
+    variant: str = "default",
 ) -> DecisionOutcome:
     """Route ``tokens`` through Von and return the chosen action/target.
 
-    ``procedures`` must be the enabled set in neutral order. Raises
-    ``httpx.HTTPError``/``httpx.RequestError`` if Von is unreachable; the
-    caller fails closed.
+    ``procedures`` must be the enabled set in neutral order. ``variant``
+    selects the prompt configuration (see ``decision.prompts.VARIANTS``).
+    Raises ``httpx.HTTPError``/``httpx.RequestError`` if Von is unreachable;
+    the caller fails closed.
     """
-    state = build_routing_state(tokens, procedures, cwd)
-    is_run = _run_gate(state, client)
+    v = get_variant(variant)
+    gate_state = build_routing_state(
+        tokens, procedures, cwd, extra=v.run_gate_state_extra
+    )
+    is_run = _run_gate(gate_state, client, v)
 
     if is_run:
         return _select_run_target(
-            tokens, procedures, client, cwd, confidence_threshold, ambiguity_margin
+            tokens, procedures, client, cwd,
+            confidence_threshold, ambiguity_margin, v,
         )
     return _route_control(
         tokens, procedures, client, cwd, confidence_threshold, ambiguity_margin
@@ -98,8 +114,8 @@ def decide(
 # -- stage 1: run gate (Noul) -------------------------------------------------
 
 
-def _run_gate(state: str, client: SystemOneClient) -> bool:
-    answer = client.judge(state, NoulQuestion(instructions=run_gate_condition()))
+def _run_gate(state: str, client: SystemOneClient, variant: Variant) -> bool:
+    answer = client.judge(state, NoulQuestion(instructions=variant.run_gate_condition))
     return answer.probability >= RUN_GATE_THRESHOLD
 
 
@@ -113,6 +129,7 @@ def _select_run_target(
     cwd: Path | None,
     confidence_threshold: float,
     ambiguity_margin: float,
+    variant: Variant,
 ) -> DecisionOutcome:
     if not procedures:
         return DecisionOutcome(
@@ -121,13 +138,33 @@ def _select_run_target(
     options = build_run_target_options(procedures)
     answer = client.choose(
         build_routing_state(tokens, procedures, cwd),
-        ChoiceQuestion(instructions=run_target_instructions(), criteria=options),
+        ChoiceQuestion(
+            instructions=variant.run_target_instructions, criteria=options
+        ),
     )
-    gated = _apply_gates(answer, options, confidence_threshold, ambiguity_margin)
-    if gated is not None:
-        return gated
+
+    # Low-confidence pick: abandon to clarification.
+    if answer.winning_probability < confidence_threshold:
+        return _clarify(
+            answer,
+            options,
+            f"winning probability {answer.winning_probability:.2f} below "
+            f"threshold {confidence_threshold:.2f}",
+        )
+
     if answer.choice == NONE_OF_THE_ABOVE or answer.choice not in options:
         return _escalate(answer, options, "model found no matching procedure to run")
+
+    # Near-tied top two: run the showdown Noul before trusting the pick.
+    top = answer.top_two()
+    if top is not None:
+        (_top_key, _top_p), (runner_key, _runner_p) = top
+        margin = _top_p - _runner_p
+        if margin < ambiguity_margin:
+            return _showdown(
+                tokens, answer, options, _top_key, runner_key, client, cwd
+            )
+
     return DecisionOutcome(
         action=Action.SELECT_PROCEDURE,
         target_name=answer.choice,
@@ -135,6 +172,59 @@ def _select_run_target(
         probabilities=answer.probabilities,
         options=options,
         reason="model selected a procedure to run",
+    )
+
+
+def _showdown(
+    tokens: list[str],
+    answer: ChoiceAnswer,
+    options: dict[str, str],
+    top_key: str,
+    runner_up_key: str,
+    client: SystemOneClient,
+    cwd: Path | None,
+) -> DecisionOutcome:
+    """Resolve a near-tied run pick with a Noul; confirm with the user if unsure."""
+    from treble.decision.prompts import showdown_condition
+
+    condition = showdown_condition(
+        request=" ".join(tokens),
+        top=top_key,
+        top_description=options.get(top_key, ""),
+        runner_up=runner_up_key,
+        runner_up_description=options.get(runner_up_key, ""),
+    )
+    noul: NoulAnswer = client.judge(build_state(tokens, cwd), NoulQuestion(instructions=condition))
+    p = noul.probability
+
+    if p >= SHOWDOWN_NOUL_TRUST:
+        # The model confidently confirms the top pick: run it normally.
+        return DecisionOutcome(
+            action=Action.SELECT_PROCEDURE,
+            target_name=top_key,
+            confidence=p,
+            probabilities=answer.probabilities,
+            options=options,
+            runner_up=runner_up_key,
+            reason=f"showdown Noul confirmed {top_key!r} (p={p:.2f})",
+        )
+    if p >= SHOWDOWN_ABANDON:
+        # Unsure: keep the pick but ask the user to confirm before executing.
+        return DecisionOutcome(
+            action=Action.SELECT_PROCEDURE,
+            target_name=top_key,
+            confidence=p,
+            probabilities=answer.probabilities,
+            options=options,
+            runner_up=runner_up_key,
+            confirm=True,
+            reason=f"showdown Noul unsure between {top_key!r}/{runner_up_key!r} (p={p:.2f})",
+        )
+    # The model does not believe the top pick is right: abandon.
+    return _clarify(
+        answer,
+        options,
+        f"showdown Noul rejected top pick {top_key!r} (p={p:.2f})",
     )
 
 
