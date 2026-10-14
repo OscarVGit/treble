@@ -1,6 +1,6 @@
 # Treble — A Decision-Driven Command Execution Harness
 
-**Status:** Implemented MVP (Milestones 1–2 of the proposal below)
+**Status:** Implemented MVP — Milestones 1–2 complete, Milestone 5 half-complete, Milestones 3–4 pending (see §10)
 **Working name:** Treble
 **Primary implementation language:** Python (requires ≥ 3.11)
 **Runtime dependency:** the local Von decision-model server (open-source
@@ -543,6 +543,19 @@ The initial implementation should remain deliberately small.
 These features should be considered only after the core routing and execution model has demonstrated value.
 
 ## 10. Proposed development milestones
+
+Current standing:
+
+| # | Milestone | Status |
+| --- | --- | --- |
+| 1 | Deterministic command registry | Complete |
+| 2 | Decision-model routing | Complete |
+| 3 | Environment preconditions | Not started — fields captured, not enforced |
+| 4 | LLM-assisted procedure authoring | Not started — Layer 6 is an interface stub |
+| 5 | Evaluation and team sharing | Partial — evaluation suite built; shareable registries pending |
+
+Milestones 1 and 2 are complete; Milestone 5's evaluation half is built
+(`evals/run_eval.py`, `EVALUATION.md`); Milestones 3 and 4 are untouched.
 
 ### Milestone 1 — Deterministic command registry
 
