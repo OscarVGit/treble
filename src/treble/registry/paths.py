@@ -16,6 +16,7 @@ from treble.registry.models import Scope
 
 PROCEDURES_SUBDIR = "procedures"
 AUDIT_LOG_NAME = "audit.jsonl"
+EVENTS_LOG_NAME = "events.jsonl"
 
 
 def scope_procedures_dir(scope: Scope, cwd: Path | None = None) -> Path:
@@ -38,3 +39,8 @@ def procedure_file(scope: Scope, name: str, cwd: Path | None = None) -> Path:
 def audit_log_path(cwd: Path | None = None) -> Path:
     """Project-local audit log (created on first write)."""
     return project_treble_dir(cwd) / AUDIT_LOG_NAME
+
+
+def events_log_path(cwd: Path | None = None) -> Path:
+    """Project-local routing-event log (every request, incl. non-executions)."""
+    return project_treble_dir(cwd) / EVENTS_LOG_NAME

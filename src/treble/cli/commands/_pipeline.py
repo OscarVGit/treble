@@ -19,6 +19,7 @@ confident the model was.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import httpx
@@ -29,9 +30,11 @@ from treble.decision import Action, SystemOneClient, decide, default_client
 from treble.registry import Procedure, ProcedureNotFound, ProcedureStore
 from treble.runtime import (
     AuditRecord,
+    EventRecord,
     PolicyDecision,
     SafetyPolicy,
     append_audit,
+    append_event,
     execute,
     verify,
 )
@@ -44,6 +47,34 @@ EXIT_DENIED = 4
 EXIT_FAILED = 5
 EXIT_VON_UNAVAILABLE = 6
 EXIT_CLARIFY = 7
+
+
+def _log_event(
+    cwd: Path | None,
+    *,
+    source: str,
+    action: str,
+    target: str | None,
+    reason: str | None = None,
+    confidence: float | None = None,
+    exit_code: int = 0,
+) -> None:
+    """Append one routing event (best-effort; never breaks a request)."""
+    try:
+        append_event(
+            EventRecord(
+                ts=time.time(),
+                source=source,
+                action=action,
+                target=target,
+                confidence=confidence,
+                reason=reason,
+                exit_code=exit_code,
+            ),
+            cwd=cwd,
+        )
+    except OSError:
+        pass
 
 
 def run_pipeline(
@@ -73,14 +104,24 @@ def run_pipeline(
 
     forward = match_forward(tokens, procedures)
     if forward is not None:
-        return _run_procedure(
+        code = _run_procedure(
             forward.procedure,
             cwd=cwd,
             dry_run=dry_run,
             assume_yes=assume_yes,
             policy=policy,
             extra_args=forward.extras,
+            source="forwarding",
         )
+        _log_event(
+            cwd,
+            source="forwarding",
+            action="select",
+            target=forward.procedure.name,
+            reason="argument forwarding",
+            exit_code=code,
+        )
+        return code
 
     client = client or default_client(cfg)
 
@@ -94,9 +135,17 @@ def run_pipeline(
             fg="red",
             err=True,
         )
+        _log_event(
+            cwd,
+            source="routed",
+            action="error",
+            target=None,
+            reason=exc.__class__.__name__,
+            exit_code=EXIT_VON_UNAVAILABLE,
+        )
         return EXIT_VON_UNAVAILABLE
 
-    return _dispatch(
+    code = _dispatch(
         outcome_action=outcome.action,
         target_name=outcome.target_name,
         store=store,
@@ -106,6 +155,16 @@ def run_pipeline(
         policy=policy,
         outcome=outcome,
     )
+    _log_event(
+        cwd,
+        source="routed",
+        action=outcome.action.value,
+        target=outcome.target_name,
+        confidence=outcome.confidence,
+        reason=outcome.reason,
+        exit_code=code,
+    )
+    return code
 
 
 def run_procedure_by_name(
@@ -125,14 +184,20 @@ def run_procedure_by_name(
     store = ProcedureStore(cwd)
     procedure = _resolve(store, name)
     if procedure is None:
+        _log_event(cwd, source="literal", action="test", target=name,
+                   reason="not found", exit_code=EXIT_NO_MATCH)
         return EXIT_NO_MATCH
-    return _run_procedure(
+    code = _run_procedure(
         procedure,
         cwd=cwd,
         dry_run=dry_run,
         assume_yes=assume_yes,
         policy=policy or SafetyPolicy(),
+        source="literal",
     )
+    _log_event(cwd, source="literal", action="test", target=procedure.name,
+               reason="literal test", exit_code=code)
+    return code
 
 
 def remove_procedure_by_name(
@@ -149,7 +214,10 @@ def remove_procedure_by_name(
     confirmation and dry-run gates rather than deleting outright.
     """
     store = ProcedureStore(cwd)
-    return _remove(store, name, dry_run=dry_run, assume_yes=assume_yes)
+    code = _remove(store, name, dry_run=dry_run, assume_yes=assume_yes)
+    _log_event(cwd, source="literal", action="remove", target=name,
+               reason="literal remove", exit_code=code)
+    return code
 
 
 def _dispatch(
@@ -177,6 +245,9 @@ def _dispatch(
             confirm=outcome.confirm,
             confirm_reason=outcome.confirm_reason,
             showdown_runner_up=outcome.runner_up,
+            source="routed",
+            decision_reason=outcome.reason,
+            decision_confidence=outcome.confidence,
         )
 
     if outcome_action is Action.REMOVE_PROCEDURE:
@@ -250,6 +321,9 @@ def _run_procedure(
     confirm: bool = False,
     confirm_reason: str = "",
     showdown_runner_up: str | None = None,
+    source: str = "unknown",
+    decision_reason: str | None = None,
+    decision_confidence: float | None = None,
 ) -> int:
     full_argv = [*procedure.invocation(), *(extra_args or [])]
 
@@ -291,7 +365,16 @@ def _run_procedure(
 
     result = execute(procedure, cwd=cwd, extra_args=extra_args)
     outcome = verify(procedure.verify, result, cwd=cwd)
-    append_audit(AuditRecord.from_execution(result, verified=outcome.passed), cwd=cwd)
+    append_audit(
+        AuditRecord.from_execution(
+            result,
+            verified=outcome.passed,
+            source=source,
+            decision_reason=decision_reason,
+            decision_confidence=decision_confidence,
+        ),
+        cwd=cwd,
+    )
     LearningStore(cwd).record_outcome(
         procedure.name,
         procedure.fingerprint(),

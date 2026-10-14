@@ -41,6 +41,8 @@ def test_literal_invocation_detection() -> None:
 
     # Well-formed literal calls stay deterministic.
     assert _is_literal_invocation(["list"])
+    assert _is_literal_invocation(["stats"])
+    assert _is_literal_invocation(["stats", "--json"])
     assert _is_literal_invocation(["remove", "hello"])
     assert _is_literal_invocation(["show", "hello"])
     assert _is_literal_invocation(["test", "hello", "--dry-run"])
@@ -153,6 +155,20 @@ def test_explain_subcommand(project_cwd: Path) -> None:
     assert result.exit_code == 0
     assert "procedure: hello" in result.output
     assert "argv:      echo hello" in result.output
+
+
+def test_stats_subcommand_empty(project_cwd: Path) -> None:
+    result = runner.invoke(main_app, ["stats"])
+    assert result.exit_code == 0
+    assert "no Treble activity" in result.output
+
+
+def test_stats_subcommand_json(project_cwd: Path) -> None:
+    import json
+
+    result = runner.invoke(main_app, ["stats", "--json"])
+    assert result.exit_code == 0
+    assert "executions" in json.loads(result.output)
 
 
 # -- Von-routed free-form path ------------------------------------------------

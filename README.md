@@ -85,6 +85,11 @@ The sections below describe the target product. What is **currently built**
 - **Safe runtime**: no shell interpolation, risk-gated confirmation,
   timeouts, post-execution verification, redacted JSONL audit and outcome
   logs, and actionable failure messages (missing executable, ENOENT).
+- **Usage logging & `treble stats`**: every routed request is appended to a
+  project-local `.treble/events.jsonl` and every execution to
+  `.treble/audit.jsonl` (each carrying the invocation `source` and, for runs,
+  the routing decision). `treble stats` (or `--json`) summarizes requests,
+  routing distribution, first-try success, latency, hot and unused procedures.
 - **Test/eval harness**: `pytest` (unit + integration),
   `scripts/smoke_test.sh` (end-to-end CLI), and a 73-case confusion-matrix
   eval suite (`evals/run_eval.py`) with per-category breakdown, a safety
@@ -192,6 +197,7 @@ treble show check-no-verify
 treble explain check-no-verify     # NAME (not free-form intent)
 treble test check-no-verify        # run a named procedure directly, bypassing Von
 treble remove check-no-verify
+treble stats                       # usage summary from .treble/events.jsonl + audit.jsonl
 treble  # or the natural-language equivalents, e.g. "show me the build step"
 ```
 
@@ -638,5 +644,46 @@ Over time, the system could accumulate reusable procedural knowledge without req
 The long-term vision is straightforward:
 
 **Describe what you want to do. Treble selects a known-good procedure, executes it under explicit constraints, verifies the result and learns how to handle future variations.**
+
+### Possible extension — beyond developer CLIs
+
+The registry and decision layer are **transport-agnostic**: a procedure is just
+a named action with a description, a command vector and a declared risk.
+Nothing in the routing model assumes the backend is a shell command. That opens
+a possible direction — the same natural-language front-end for **non-technical
+users**: "generate the monthly sales report" mapping to a registered VBA macro,
+"open the timesheet" to an app launch, "back up my documents" to a script.
+
+This is a product direction, not current scope, and it is mostly work *past*
+the milestones in §10:
+
+- **Pluggable action kinds** (small): an `action` field so a procedure can be a
+  shell command, an AppleScript, an app launch, a URL or a macro wrapper,
+  instead of implicitly a shell command. (The macro case already works today
+  via a registered wrapper script; the field would make it first-class.)
+- **A non-terminal front-end** (large): a tray app, desktop shortcut, search
+  box or chat surface. The routing is ready; the *delivery surface* is not.
+- **An authoring flow** — leans on Milestone 4, so a non-technical user (or
+  their admin) never hand-writes YAML.
+- **Preconditions and verification** — leans on Milestone 3, so "Excel is not
+  running" or "the macro failed" is reported rather than blindly retried.
+- **Distribution** — an installer rather than `pip install`.
+
+Two ideas to keep separate:
+
+- **On-demand actions** (macro, app launch) fit Treble's interactive, one-shot
+  model directly.
+- **Scheduled / startup execution** is a *different* component — a daemon or
+  scheduler, deferred in §9 — that would consume the same registry, not extend
+  the CLI.
+
+The risk posture also shifts. This audience needs *more* guardrails, not more
+flexibility: narrow action spaces, confirmation-before-execute and
+clarify-don't-guess are exactly what the decision layer already provides — but
+the declared-risk trust model matters far more, and "register an action that can
+do anything" becomes a governance question (who approves a procedure?).
+
+The smallest validating step: make the backend pluggable while keeping the CLI,
+and demonstrate one non-shell action end to end.
 
 The first objective is more modest: build a reliable command registry with deterministic execution, then establish whether Von-based routing and LLM-assisted procedure creation improve it enough to justify their complexity.
