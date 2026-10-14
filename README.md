@@ -213,6 +213,55 @@ Confirmation is driven by the declared risk, not by inspecting the command
 text — a procedure registered as `read-only` runs without a prompt even if its
 command is `rm -rf …`.
 
+### 4.4 Using Treble in another repo
+
+Treble installs once per machine and lives *inside* each repo it serves.
+
+```bash
+# install the CLI (isolated, on PATH)
+pipx install git+https://github.com/OscarVGit/treble
+# or: uv tool install git+https://github.com/OscarVGit/treble
+
+cd ~/my-project
+treble init                        # scaffold .treble/ + update .gitignore
+treble-add "pnpm run check --no-verify" \
+  --name check-no-verify --description "Run checks without verification" \
+  --risk read-only
+git add .treble/procedures .gitignore && git commit   # share with the team
+```
+
+- **Commit `.treble/procedures/`** — that is how a team shares known-good
+  commands (project scope). Runtime state (`events.jsonl`, `audit.jsonl`,
+  `outcomes.jsonl`, `von.log`) is gitignored. `treble init` writes the right
+  `.gitignore` entries for you.
+- **No config required** — project scope resolves from the working directory.
+- **Von is optional.** Without it, the deterministic paths work with no extra
+  dependency: `treble list`, `treble test <name>`, `treble <name> --flag`
+  (forwarding), `treble stats`, `treble-add`. Only free-form routing
+  (`treble "run the checks"`) needs the decision service — start it with
+  `scripts/run_von.sh`, or `pip install "treble[von]"` and `von serve`.
+- **Run `treble doctor`** to check the install, the Von endpoint and the
+  registry.
+
+**From JavaScript / `package.json`.** A Python tool can't self-contain through
+npm, but npm scripts can call the installed CLI. Register procedures once, then
+wire them into `package.json`:
+
+```json
+{
+  "scripts": {
+    "check": "treble test check-no-verify",
+    "build": "treble test build",
+    "treble:list": "treble list",
+    "treble:stats": "treble stats"
+  }
+}
+```
+
+Because these call `treble test <name>` (deterministic), they run in CI without
+Von. For an agent, add the paragraph from `AGENTS.md` so it prefers the registry
+over re-deriving flags.
+
 ## 5. Architecture
 
 Treble should follow a deterministic-first architecture.

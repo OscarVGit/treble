@@ -9,6 +9,14 @@ description = "A decision-driven command execution harness"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Software Development :: Build Tools",
+    "Typing :: Typed",
+]
 dependencies = [
     "typer>=0.9",
     "pydantic>=2",
@@ -17,7 +25,14 @@ dependencies = [
     "httpx>=0.25",
 ]
 
+[project.urls]
+Repository = "https://github.com/OscarVGit/treble"
+
 [project.optional-dependencies]
+# Von is a separate local decision service, not a base dependency. Install the
+# SDK here if you want free-form routing in the same environment; the
+# deterministic paths (list/test/forwarding/stats) never need it.
+von = ["von-sdk>=1.3"]
 dev = [
     "pytest>=8",
     "pytest-cov",

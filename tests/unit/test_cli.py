@@ -43,6 +43,10 @@ def test_literal_invocation_detection() -> None:
     assert _is_literal_invocation(["list"])
     assert _is_literal_invocation(["stats"])
     assert _is_literal_invocation(["stats", "--json"])
+    assert _is_literal_invocation(["doctor"])
+    assert _is_literal_invocation(["doctor", "--no-von"])
+    assert _is_literal_invocation(["init"])
+    assert _is_literal_invocation(["init", "--package-json"])
     assert _is_literal_invocation(["remove", "hello"])
     assert _is_literal_invocation(["show", "hello"])
     assert _is_literal_invocation(["test", "hello", "--dry-run"])
@@ -169,6 +173,42 @@ def test_stats_subcommand_json(project_cwd: Path) -> None:
     result = runner.invoke(main_app, ["stats", "--json"])
     assert result.exit_code == 0
     assert "executions" in json.loads(result.output)
+
+
+def test_doctor_reports_registry(project_cwd: Path) -> None:
+    _register(project_cwd)
+    result = runner.invoke(main_app, ["doctor", "--no-von"])
+    assert result.exit_code == 0
+    assert "registry" in result.output
+    assert "hello" in result.output
+
+
+def test_doctor_empty_registry_ok(project_cwd: Path) -> None:
+    result = runner.invoke(main_app, ["doctor", "--no-von"])
+    assert result.exit_code == 0
+    assert "0 procedure(s)" in result.output
+
+
+def test_init_scaffolds_registry_and_gitignore(project_cwd: Path) -> None:
+    result = runner.invoke(main_app, ["init"])
+    assert result.exit_code == 0
+    assert (project_cwd / ".treble" / "procedures").is_dir()
+    gitignore = (project_cwd / ".gitignore").read_text(encoding="utf-8")
+    assert ".treble/events.jsonl" in gitignore
+    assert ".treble/audit.jsonl" in gitignore
+
+
+def test_init_is_idempotent(project_cwd: Path) -> None:
+    runner.invoke(main_app, ["init"])
+    result = runner.invoke(main_app, ["init"])
+    assert result.exit_code == 0
+    assert "already ignores" in result.output
+
+
+def test_init_package_json_snippet(project_cwd: Path) -> None:
+    result = runner.invoke(main_app, ["init", "--package-json"])
+    assert result.exit_code == 0
+    assert "treble test" in result.output
 
 
 # -- Von-routed free-form path ------------------------------------------------

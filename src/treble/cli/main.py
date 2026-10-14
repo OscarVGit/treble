@@ -10,10 +10,22 @@ import sys
 
 import typer
 
-from treble.cli.commands import add_cmd, explain, list_cmd, remove, show, stats_cmd, test_cmd
+from treble.cli.commands import (
+    add_cmd,
+    doctor_cmd,
+    explain,
+    init_cmd,
+    list_cmd,
+    remove,
+    show,
+    stats_cmd,
+    test_cmd,
+)
 from treble.registry import RegistryError
 
-_KNOWN_SUBCOMMANDS = {"add", "list", "show", "explain", "test", "remove", "run", "stats"}
+_KNOWN_SUBCOMMANDS = {
+    "add", "list", "show", "explain", "test", "remove", "run", "stats", "doctor", "init",
+}
 
 app = typer.Typer(
     name="treble",
@@ -29,6 +41,8 @@ app.command("explain")(explain.explain)
 app.command("test")(test_cmd.test_cmd)
 app.command("remove")(remove.remove)
 app.command("stats")(stats_cmd.stats_cmd)
+app.command("doctor")(doctor_cmd.doctor_cmd)
+app.command("init")(init_cmd.init_cmd)
 
 
 @app.command(
@@ -95,6 +109,10 @@ def _is_literal_invocation(argv: list[str]) -> bool:
         return not rest
     if command == "stats":
         return all(flag == "--json" for flag in rest)
+    if command == "doctor":
+        return all(flag in {"--von", "--no-von"} for flag in rest)
+    if command == "init":
+        return all(flag == "--package-json" for flag in rest)
     if command == "add":
         return any(flag in _ADD_FLAGS for flag in rest)
     if command in _ONE_ARG_SUBCOMMANDS:
