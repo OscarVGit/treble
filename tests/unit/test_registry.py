@@ -90,3 +90,25 @@ def test_risk_defaults_read_only(echo_proc: Procedure) -> None:
 
 def test_scope_defaults_project(echo_proc: Procedure) -> None:
     assert echo_proc.scope is Scope.PROJECT
+
+
+def test_add_destructive_procedure_round_trips(
+    store: ProcedureStore, project_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: non-default risk/scope enums must serialize to YAML."""
+    monkeypatch.setattr(
+        "treble.registry.paths.user_config_dir", lambda: project_cwd / ".home"
+    )
+    proc = Procedure(
+        name="wipe",
+        description="Delete the build cache",
+        executable="rm",
+        args=["-rf", "./cache"],
+        risk=RiskLevel.DESTRUCTIVE,
+        scope=Scope.PERSONAL,
+    )
+    store.add(proc)
+    loaded = store.get("wipe")
+    assert loaded.risk is RiskLevel.DESTRUCTIVE
+    assert loaded.scope is Scope.PERSONAL
+    assert loaded.invocation() == ["rm", "-rf", "./cache"]

@@ -63,12 +63,14 @@ def test_von_unreachable_fails_closed(
 
 
 def test_no_regex_fallback(store: ProcedureStore, echo_proc: Procedure, project_cwd: Path) -> None:
-    """A bare procedure name still routes through Von (no deterministic shortcut)."""
+    """A bare procedure name still routes through Von (no deterministic
+    execution shortcut): the gate is skipped by the bare-name signal, but Von's
+    run-target Choice still selects the procedure."""
     store.add(echo_proc)
     client = _run_client([echo_proc], "echo-hello")
     rc = run_pipeline(["echo-hello"], cwd=project_cwd, client=client)
     assert rc == EXIT_OK
-    assert client.calls and client.calls[0][0] == "judge"  # Von was consulted first
+    assert client.calls and client.calls[0][0] == "choose"  # Von selects the target
 
 
 def test_forwarding_runs_extra_args_without_von(
@@ -234,8 +236,9 @@ def test_clarify_prints_alternatives(
     probs = {k: 0.01 for k in options}
     probs["check"] = 0.5
     probs["check-no-verify"] = 0.45  # within margin
-    # gate=run, showdown Noul rejects top pick (0.1 -> abandon -> CLARIFY)
-    client = FakeSystemOneClient(noul_series=[0.9, 0.1], answer=make_answer("check", probs))
+    # bare "check" skips the run gate; showdown Noul rejects the top pick
+    # (0.1 -> abandon -> CLARIFY)
+    client = FakeSystemOneClient(noul_series=[0.1], answer=make_answer("check", probs))
     rc = run_pipeline(["check"], cwd=project_cwd, client=client)
     out = capsys.readouterr().out
     assert rc == EXIT_CLARIFY
@@ -259,8 +262,8 @@ def test_showdown_unsure_asks_user_to_confirm(
     probs = {k: 0.01 for k in options}
     probs["check"] = 0.5
     probs["check-no-verify"] = 0.45  # within margin
-    # gate=run, showdown Noul unsure (0.45 -> confirm, don't clarify)
-    client = FakeSystemOneClient(noul_series=[0.9, 0.45], answer=make_answer("check", probs))
+    # bare "check" skips the run gate; showdown Noul unsure (0.45 -> confirm)
+    client = FakeSystemOneClient(noul_series=[0.45], answer=make_answer("check", probs))
     monkeypatch.setattr("typer.confirm", lambda prompt: True)  # user approves
     rc = run_pipeline(["check"], cwd=project_cwd, dry_run=True, client=client)
     out = capsys.readouterr().out

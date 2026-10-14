@@ -74,6 +74,32 @@ _CONTROL_TARGET_INSTRUCTIONS = (
     "Which registered procedure is the target of this request?"
 )
 
+# Folded routing (variant "folded"): one Choice over "run" plus the management
+# verbs, replacing the Noul run gate + separate control-verb Choice. Von's
+# Choice is its strongest primitive; the hypothesis is that a single decision
+# over the full action space discriminates run-vs-inspect better than a binary
+# Noul gate followed by a verb Choice.
+RUN_ACTION = "run"
+
+_ACTION_DESCRIPTIONS: dict[str, str] = {
+    RUN_ACTION: "Run or execute one of the registered procedures",
+    **CONTROL_VERB_DESCRIPTIONS,
+}
+
+_ACTION_INSTRUCTIONS = (
+    "The developer either wants to run a registered procedure or to manage the "
+    "registry. Choose 'run' to execute a procedure, or the matching management "
+    "action (list, show, explain, test, remove, add)."
+)
+
+
+def build_action_options() -> dict[str, str]:
+    return dict(_ACTION_DESCRIPTIONS)
+
+
+def action_instructions() -> str:
+    return _ACTION_INSTRUCTIONS
+
 
 # -- Prompt variants (A/B measurement) -----------------------------------------
 #
@@ -94,6 +120,7 @@ class Variant:
     run_gate_condition: str = RUN_GATE_CONDITION
     run_gate_state_extra: str = ""
     run_target_instructions: str = _RUN_TARGET_INSTRUCTIONS
+    folded: bool = False
 
 
 VARIANTS: dict[str, Variant] = {}
@@ -124,6 +151,31 @@ VARIANTS["compact-gate"] = Variant(
         "Short requests that name a procedure count as run requests; "
         "list/show/explain/test/remove/add are management requests."
     ),
+)
+
+# Hypothesis: replace the Noul run gate + control-verb Choice with a single
+# Choice over {run, list, show, explain, test, remove, add, none}. One decision
+# over the full action space should separate run from inspect/management better
+# than a binary Noul (Von's weakest tier) followed by a verb Choice.
+# FALSIFIED (see EVALUATION.md): 'run' dominates the control/escalate cases.
+VARIANTS["folded"] = Variant(name="folded", folded=True)
+
+# Hypothesis: the default gate loses inspection requests that embed a
+# procedure name ("show me the build procedure") because the bare-name rule
+# dominates. This variant gives explicit inspection verbs precedence over an
+# embedded name, so "show/explain/describe/display/list X" answers no even
+# though it names a procedure.
+RUN_GATE_CONDITION_VERB_FIRST = (
+    "Is the developer asking to execute or run one of the listed procedures? "
+    "If the request asks to show, explain, describe, display, list, or tell "
+    "about a procedure — even when it names one — answer no: that is an "
+    "inspection request, not execution. Treat a request as execution only when "
+    "it asks to run or execute a procedure, or names one with no inspection "
+    "verb. Answer no for requests unrelated to running a command."
+)
+VARIANTS["verb-first-gate"] = Variant(
+    name="verb-first-gate",
+    run_gate_condition=RUN_GATE_CONDITION_VERB_FIRST,
 )
 
 

@@ -121,5 +121,10 @@ class Procedure(BaseModel):
 
 
 def procedure_to_yaml_dict(procedure: Procedure) -> dict[str, Any]:
-    """Serialize for YAML storage (omits defaults to keep files readable)."""
-    return procedure.model_dump(mode="python", exclude_defaults=True)
+    """Serialize for YAML storage (omits defaults to keep files readable).
+
+    Uses ``mode="json"`` so ``StrEnum`` fields (``risk``, ``scope``) become
+    plain strings — ``mode="python"`` leaves enum objects that PyYAML's safe
+    dumper cannot represent.
+    """
+    return procedure.model_dump(mode="json", exclude_defaults=True)

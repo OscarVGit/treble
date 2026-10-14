@@ -56,7 +56,8 @@ def test_full_round_trip(project_cwd: Path, monkeypatch: pytest.MonkeyPatch) -> 
     ran = runner.invoke(main_app, ["run", "smoke"])
     assert ran.exit_code == 0, ran.output
     assert "treble-works" in ran.output
-    assert [c[0] for c in client.calls] == ["judge", "choose"]
+    # bare name: run gate skipped; Von's run-target Choice selects the procedure
+    assert [c[0] for c in client.calls] == ["choose"]
 
     audit_file = project_cwd / ".treble" / "audit.jsonl"
     assert audit_file.exists()

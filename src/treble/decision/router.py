@@ -18,16 +18,19 @@ fails closed — there is no deterministic fallback.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from treble.decision.actions import Action
 from treble.decision.client import SystemOneClient
 from treble.decision.prompts import (
     NONE_OF_THE_ABOVE,
+    RUN_ACTION,
     TARGETED_VERBS,
     VERB_TO_ACTION,
     Variant,
+    action_instructions,
+    build_action_options,
     build_control_target_options,
     build_control_verb_options,
     build_routing_state,
@@ -44,7 +47,7 @@ from treble.decision.protocol import (
     NoulAnswer,
     NoulQuestion,
 )
-from treble.registry.models import Procedure
+from treble.registry.models import Procedure, RiskLevel
 
 DEFAULT_CONFIDENCE_THRESHOLD: float = 0.4
 DEFAULT_AMBIGUITY_MARGIN: float = 0.08
@@ -76,6 +79,7 @@ class DecisionOutcome:
     reason: str = ""
     runner_up: str | None = None  # the second-best candidate, if contested
     confirm: bool = False  # ask the user to confirm before executing
+    confirm_reason: str = ""  # why confirmation is required (if it is)
 
 
 def decide(
@@ -96,22 +100,110 @@ def decide(
     the caller fails closed.
     """
     v = get_variant(variant)
-    gate_state = build_routing_state(
-        tokens, procedures, cwd, extra=v.run_gate_state_extra
-    )
-    is_run = _run_gate(gate_state, client, v)
-
-    if is_run:
-        return _select_run_target(
+    if v.folded:
+        return _route_folded(
             tokens, procedures, client, cwd,
             confidence_threshold, ambiguity_margin, v,
         )
-    return _route_control(
-        tokens, procedures, client, cwd, confidence_threshold, ambiguity_margin
-    )
+
+    # Deterministic inspect-precedence signal. A leading inspection/management
+    # verb routes straight to the control plane *without consulting the run
+    # gate*: otherwise a request like "show me the build procedure" embeds a
+    # procedure name and the gate executes it (see EVALUATION.md §7). The model
+    # still chooses the verb and target — this only selects which stage runs.
+    if _leading_inspection_verb(tokens, procedures) is not None:
+        outcome = _route_control(
+            tokens, procedures, client, cwd, confidence_threshold, ambiguity_margin
+        )
+    # Symmetric bare-name signal: a request that is *only* a registered name or
+    # alias (a bare "describe" naming a procedure called `describe`) is a run by
+    # convention, but the gate under-scores such names. Route to the run path
+    # deterministically; the model still chooses the target (and the collision
+    # showdown still guards near-duplicates).
+    elif _bare_registered_name(tokens, procedures) is not None:
+        outcome = _select_run_target(
+            tokens, procedures, client, cwd,
+            confidence_threshold, ambiguity_margin, v,
+        )
+    else:
+        gate_state = build_routing_state(
+            tokens, procedures, cwd, extra=v.run_gate_state_extra
+        )
+        is_run = _run_gate(gate_state, client, v)
+        if is_run:
+            outcome = _select_run_target(
+                tokens, procedures, client, cwd,
+                confidence_threshold, ambiguity_margin, v,
+            )
+        else:
+            outcome = _route_control(
+                tokens, procedures, client, cwd,
+                confidence_threshold, ambiguity_margin,
+            )
+    return _apply_mutation_gate(outcome, procedures)
 
 
 # -- stage 1: run gate (Noul) -------------------------------------------------
+
+
+# Leading inspection/management verbs. Inspection phrasings embed a procedure
+# name ("show me the build procedure") and would otherwise be scored as run
+# requests by the gate; a leading verb is a deterministic, high-precision
+# signal that the request is *about* a procedure, not an intent to execute one.
+_INSPECTION_LEAD_VERBS = frozenset(
+    {"show", "explain", "describe", "display", "list", "tell", "what", "how"}
+)
+# Courtesy/filler words to skip before reading the leading verb.
+_LEAD_FILLER = frozenset(
+    {"please", "can", "could", "would", "will", "you", "kindly", "just"}
+)
+
+
+def _leading_inspection_verb(
+    tokens: list[str], procedures: list[Procedure]
+) -> str | None:
+    """The leading inspection/management verb, or ``None``.
+
+    A *bare* invocation of a procedure named like an inspection verb (a
+    procedure called ``list``) is a run, so it is left to the gate. But when
+    the same name appears in a phrase ("show me the build procedure"), the
+    phrase is an inspection — a registered name must not disable inspection
+    precedence for the whole request. So the bare-name exemption applies only
+    when the leading word is the *sole* content token; otherwise a leading
+    inspection verb routes to the control plane. Everything after the verb is
+    left to the model.
+    """
+    names = {n.lower() for p in procedures for n in (p.name, *p.aliases)}
+    content = [t for t in tokens if t.lower() not in _LEAD_FILLER]
+    if not content:
+        return None
+    lead = content[0].lower()
+    if lead in names and len(content) == 1:
+        return None  # a bare procedure name (even verb-spelled) is a run
+    return lead if lead in _INSPECTION_LEAD_VERBS else None
+
+
+def _bare_registered_name(
+    tokens: list[str], procedures: list[Procedure]
+) -> str | None:
+    """The procedure named by a *bare* request, or ``None``.
+
+    A request whose only content token is exactly a registered name or alias
+    ("describe", "compile", "check-no-verify") is a run by convention. The run
+    gate under-scores some such names — a procedure called ``describe`` reads
+    like a verb — so this deterministic signal routes them to the run path
+    instead of trusting the gate. The model still chooses the target.
+    """
+    content = [t for t in tokens if t.lower() not in _LEAD_FILLER]
+    if len(content) != 1:
+        return None
+    low = content[0].lower()
+    for procedure in procedures:
+        if low == procedure.name.lower():
+            return procedure.name
+        if low in {a.lower() for a in procedure.aliases}:
+            return procedure.name
+    return None
 
 
 def _run_gate(state: str, client: SystemOneClient, variant: Variant) -> bool:
@@ -164,6 +256,18 @@ def _select_run_target(
             return _showdown(
                 tokens, answer, options, _top_key, runner_key, client, cwd
             )
+
+    # Near-duplicate name collision: the request names a procedure exactly,
+    # but the model preferred a longer registered name that merely extends it
+    # (e.g. request "check", pick "check-no-verify"). Such a pick is confident
+    # enough that the margin gate above never fires, so adjudicate it with the
+    # showdown Noul and fall back to the exact-name match if the Noul rejects.
+    collision = _name_collision(tokens, procedures, answer.choice)
+    if collision is not None:
+        return _collision_showdown(
+            tokens, answer, options, answer.choice, collision, client, cwd,
+            Action.SELECT_PROCEDURE,
+        )
 
     return DecisionOutcome(
         action=Action.SELECT_PROCEDURE,
@@ -218,6 +322,7 @@ def _showdown(
             options=options,
             runner_up=runner_up_key,
             confirm=True,
+            confirm_reason=f"Treble is unsure between {top_key!r} and {runner_up_key!r}",
             reason=f"showdown Noul unsure between {top_key!r}/{runner_up_key!r} (p={p:.2f})",
         )
     # The model does not believe the top pick is right: abandon.
@@ -225,6 +330,59 @@ def _showdown(
         answer,
         options,
         f"showdown Noul rejected top pick {top_key!r} (p={p:.2f})",
+    )
+
+
+def _collision_showdown(
+    tokens: list[str],
+    answer: ChoiceAnswer,
+    options: dict[str, str],
+    long_key: str,
+    exact_key: str,
+    client: SystemOneClient,
+    cwd: Path | None,
+    action: Action,
+) -> DecisionOutcome:
+    """Adjudicate a near-duplicate name collision.
+
+    The request names ``exact_key`` exactly, but the model preferred the longer
+    ``long_key`` that merely extends it. Von cannot discriminate these on its
+    own (measured: Noul p≈0.33 for "check" vs "check-no-verify", and a focused
+    re-rank Choice still picks the longer name 0.57/0.43), so the *exact* name
+    wins unless the model confidently endorses the longer pick — which a
+    qualifying request like "check --no-verify" does (p≈0.70). This is
+    registry-grounded disambiguation of an already-selected action, not
+    deterministic routing.
+    """
+    from treble.decision.prompts import showdown_condition
+
+    condition = showdown_condition(
+        request=" ".join(tokens),
+        top=long_key,
+        top_description=options.get(long_key, ""),
+        runner_up=exact_key,
+        runner_up_description=options.get(exact_key, ""),
+    )
+    noul: NoulAnswer = client.judge(
+        build_state(tokens, cwd), NoulQuestion(instructions=condition)
+    )
+    p = noul.probability
+    if p >= SHOWDOWN_NOUL_TRUST:
+        chosen, kept = long_key, True
+    else:
+        chosen, kept = exact_key, False
+    return DecisionOutcome(
+        action=action,
+        target_name=chosen,
+        confidence=p,
+        probabilities=answer.probabilities,
+        options=options,
+        runner_up=exact_key if kept else long_key,
+        reason=(
+            f"name collision: model picked {long_key!r}, request named "
+            f"{exact_key!r}; Noul p={p:.2f} -> "
+            f"{'kept longer pick' if kept else 'used exact-name match'}"
+        ),
     )
 
 
@@ -291,6 +449,12 @@ def _select_control_target(
         return gated
     if answer.choice == NONE_OF_THE_ABOVE or answer.choice not in options:
         return _escalate(answer, options, f"model found no target procedure for {verb}")
+    collision = _name_collision(tokens, procedures, answer.choice)
+    if collision is not None:
+        return _collision_showdown(
+            tokens, answer, options, answer.choice, collision, client, cwd,
+            action,
+        )
     return DecisionOutcome(
         action=action,
         target_name=answer.choice,
@@ -301,7 +465,145 @@ def _select_control_target(
     )
 
 
+# -- folded routing (single action Choice) -------------------------------------
+
+
+def _route_folded(
+    tokens: list[str],
+    procedures: list[Procedure],
+    client: SystemOneClient,
+    cwd: Path | None,
+    confidence_threshold: float,
+    ambiguity_margin: float,
+    variant: Variant,
+) -> DecisionOutcome:
+    """One Choice over {run, list, show, explain, test, remove, add, none}.
+
+    Replaces the Noul run gate + control-verb Choice with a single decision
+    over the whole action space (variant ``folded``). A ``run`` choice then
+    selects a procedure; targeted management verbs select a target.
+    """
+    options = build_action_options()
+    answer = client.choose(
+        build_routing_state(tokens, procedures, cwd, extra=variant.run_gate_state_extra),
+        ChoiceQuestion(instructions=action_instructions(), criteria=options),
+    )
+    gated = _apply_gates(answer, options, confidence_threshold, ambiguity_margin)
+    if gated is not None:
+        return _apply_mutation_gate(gated, procedures)
+
+    choice = answer.choice
+    if choice == NONE_OF_THE_ABOVE or choice not in options:
+        return _apply_mutation_gate(
+            _escalate(answer, options, "model found no matching action"), procedures
+        )
+
+    if choice == RUN_ACTION:
+        return _apply_mutation_gate(
+            _select_run_target(
+                tokens, procedures, client, cwd,
+                confidence_threshold, ambiguity_margin, variant,
+            ),
+            procedures,
+        )
+
+    action = VERB_TO_ACTION[choice]
+    if choice not in TARGETED_VERBS:
+        return _apply_mutation_gate(
+            DecisionOutcome(
+                action=action,
+                confidence=answer.confidence,
+                probabilities=answer.probabilities,
+                options=options,
+                reason="model selected a control action",
+            ),
+            procedures,
+        )
+    return _apply_mutation_gate(
+        _select_control_target(
+            tokens, choice, action, procedures, client, cwd,
+            confidence_threshold, ambiguity_margin,
+        ),
+        procedures,
+    )
+
+
 # -- shared helpers -------------------------------------------------------------
+
+
+_MUTATING_RISKS = frozenset({RiskLevel.MUTATING, RiskLevel.DESTRUCTIVE})
+
+
+def _apply_mutation_gate(
+    outcome: DecisionOutcome, procedures: list[Procedure]
+) -> DecisionOutcome:
+    """Require confirmation for any mutating/destructive selection.
+
+    The runtime already gates these (``remove`` always confirms; mutating and
+    destructive procedures trip the safety policy), but flagging them at the
+    decision layer makes the safety property explicit — *never silently
+    execute a mutating action* — regardless of how confident the routing was
+    or how good the model's discrimination is.
+    """
+    if outcome.confirm:
+        return outcome
+
+    if outcome.action is Action.REMOVE_PROCEDURE:
+        return replace(
+            outcome,
+            confirm=True,
+            confirm_reason=(
+                f"removing {outcome.target_name!r} changes the registry"
+            ),
+        )
+
+    if (
+        outcome.action in (Action.SELECT_PROCEDURE, Action.TEST)
+        and outcome.target_name
+    ):
+        procedure = _find_procedure(procedures, outcome.target_name)
+        if procedure is not None and procedure.risk in _MUTATING_RISKS:
+            return replace(
+                outcome,
+                confirm=True,
+                confirm_reason=(
+                    f"{procedure.name!r} is a {procedure.risk.value} procedure"
+                ),
+            )
+    return outcome
+
+
+def _find_procedure(
+    procedures: list[Procedure], name: str
+) -> Procedure | None:
+    for procedure in procedures:
+        if procedure.name == name or name in procedure.aliases:
+            return procedure
+    return None
+
+
+def _name_collision(
+    tokens: list[str], procedures: list[Procedure], chosen: str
+) -> str | None:
+    """The exact-named procedure the model's pick extends, if any.
+
+    Near-duplicate discrimination failure: the request names a procedure
+    exactly (e.g. "check"), but the model prefers a longer registered name
+    that merely extends it ("check-no-verify"). The pick is confident enough
+    that the margin gate never fires, so detect the name overlap
+    deterministically and let the showdown Noul adjudicate. Returns the
+    exact-named procedure's name, or ``None`` when the pick is not suspicious.
+    """
+    chosen_lower = chosen.lower()
+    requested = {token.lower() for token in tokens}
+    for procedure in procedures:
+        for name in (procedure.name, *procedure.aliases):
+            lower = name.lower()
+            if lower == chosen_lower or lower not in requested:
+                continue
+            if chosen_lower.startswith(lower):
+                return procedure.name
+    return None
 
 
 def _apply_gates(

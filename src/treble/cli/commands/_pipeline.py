@@ -135,6 +135,23 @@ def run_procedure_by_name(
     )
 
 
+def remove_procedure_by_name(
+    name: str,
+    *,
+    cwd: Path | None = None,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+) -> int:
+    """Remove a named procedure directly, bypassing Von.
+
+    Used by the literal ``treble remove`` subcommand. Mirrors the model path's
+    ``_remove`` so the deterministic control surface applies the same
+    confirmation and dry-run gates rather than deleting outright.
+    """
+    store = ProcedureStore(cwd)
+    return _remove(store, name, dry_run=dry_run, assume_yes=assume_yes)
+
+
 def _dispatch(
     *,
     outcome_action: Action,
@@ -157,7 +174,8 @@ def _dispatch(
             dry_run=dry_run,
             assume_yes=assume_yes,
             policy=policy,
-            showdown_confirm=outcome.confirm,
+            confirm=outcome.confirm,
+            confirm_reason=outcome.confirm_reason,
             showdown_runner_up=outcome.runner_up,
         )
 
@@ -229,16 +247,21 @@ def _run_procedure(
     assume_yes: bool,
     policy: SafetyPolicy,
     extra_args: list[str] | None = None,
-    showdown_confirm: bool = False,
+    confirm: bool = False,
+    confirm_reason: str = "",
     showdown_runner_up: str | None = None,
 ) -> int:
     full_argv = [*procedure.invocation(), *(extra_args or [])]
 
-    # Showdown: Von landed on this pick within the ambiguity margin and its
-    # confirmation Noul was unsure. Present the contested choice to the user
-    # so a wrong execution is caught before it happens.
-    if showdown_confirm and not (assume_yes or dry_run):
-        if showdown_runner_up and showdown_runner_up != procedure.name:
+    # Confirmation gate. Two sources require it before execution:
+    #   * a mutating/destructive selection (``confirm_reason`` set) — the
+    #     safety property: never silently execute a mutating action; and
+    #   * a near-tied pick whose showdown Noul was unsure (contested pick).
+    # --yes and --dry-run bypass the prompt (explicit intent / no execution).
+    if confirm and not (assume_yes or dry_run):
+        if confirm_reason:
+            prompt = f"{confirm_reason}. Run {procedure.name!r}? argv={full_argv}"
+        elif showdown_runner_up and showdown_runner_up != procedure.name:
             prompt = (
                 f"Treble is unsure between {procedure.name!r} and "
                 f"{showdown_runner_up!r}. Run {procedure.name!r} anyway? "

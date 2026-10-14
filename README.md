@@ -71,8 +71,12 @@ The sections below describe the target product. What is **currently built**
 - **Von-first routing** (Milestone 2): every free-form request runs through
   the decision model — run gate (Noul) + target/control Choices — with
   confidence/margin gates that clarify rather than guess, a Noul
-  "showdown" confirmation for near-tied picks, and fail-closed behaviour
-  when Von is down.
+  "showdown" confirmation for near-tied picks, an exact-name collision
+  resolution for near-duplicate names, an inspect-precedence signal that
+  routes leading show/explain/list/what/how phrases to the control plane,
+  a mutating/destructive confirmation
+  gate that always prompts before touching the registry or running a mutating
+  procedure, and fail-closed behaviour when Von is down.
 - **Argument forwarding** (deterministic, §5 Layer 1): calling a registered
   name/alias/command with trailing flags runs the stored argv plus those
   flags, with no model call.
@@ -82,10 +86,11 @@ The sections below describe the target product. What is **currently built**
   timeouts, post-execution verification, redacted JSONL audit and outcome
   logs, and actionable failure messages (missing executable, ENOENT).
 - **Test/eval harness**: `pytest` (unit + integration),
-  `scripts/smoke_test.sh` (end-to-end CLI), and a confusion-matrix eval
-  suite (`evals/run_eval.py`) with safety/actionability metrics, JSONL
-  result capture, and A/B prompt variants; see `EVALUATION.md` for the
-  first measured comparison.
+  `scripts/smoke_test.sh` (end-to-end CLI), and a 73-case confusion-matrix
+  eval suite (`evals/run_eval.py`) with per-category breakdown, a safety
+  property that includes *unrequested execution* (running when the user asked
+  only to inspect), a determinism/variance check (`--repeat`), JSONL result
+  capture, and A/B prompt variants; see `EVALUATION.md` for the measured runs.
 
 **Not yet built** (deferred): LLM-assisted procedure authoring (Layer 6 is an
 interface stub), team-shared registries, environment-precondition
@@ -195,6 +200,13 @@ what will run. `treble explain NAME` prints the stored argv, working
 directory, risk and verification requirements; `treble test NAME` is the
 deterministic by-name execution path.
 
+Destructive operations confirm before acting on **both** paths: `treble remove
+NAME` (and the free-form route) prompts before deleting, and `treble test NAME`
+prompts when the procedure's declared `risk` is `mutating` or `destructive`.
+Confirmation is driven by the declared risk, not by inspecting the command
+text — a procedure registered as `read-only` runs without a prompt even if its
+command is `rm -rf …`.
+
 ## 5. Architecture
 
 Treble should follow a deterministic-first architecture.
@@ -292,11 +304,23 @@ routing time.
 
 ### Layer 4 — Von decision model
 
-Von handles **every** incoming free-form request. There is no regex or
-exact-match short-circuit and no deterministic fallback: if Von is
-unreachable, Treble fails closed and reports that it cannot route. (The one
-non-model path, argument forwarding, runs the stored argv plus trailing
-flags — an argument-passing shortcut, not a routing fallback; §5 Layer 1.)
+Von routes the **ambiguous middle** of every free-form request. Around it sit
+a small number of explicit, deterministic signals for forms that are
+unambiguous — they select *which stage* runs, never the action itself, and
+never execute anything:
+
+- **Argument forwarding** — a registered identifier plus trailing flags runs
+  the stored argv directly (§5 Layer 1).
+- **Inspect precedence** — a leading inspection verb (`show`, `explain`,
+  `describe`, `display`, `list`, `what`, `how`) routes to the control plane
+  instead of the run gate.
+- **Bare-name resolution** — a request that is *only* a registered name or
+  alias routes to the run path.
+
+Each exists because Von's Noul gate cannot separate the case by wording
+(measured — `EVALUATION.md` §7–§10). In every case the model still chooses the
+verb and target; the signal only picks the question. If Von is unreachable,
+Treble fails closed and reports that it cannot route.
 
 Routing is decomposed into the primitives Von is strongest at:
 
@@ -331,7 +355,34 @@ Noul — "does the request really refer to the top pick, not the runner-up?"
 This turns the common "two similar procedures" failure mode into a
 checkable decision instead of a silent guess or a dead-end.
 
-The safety boundary is strict: Von *selects*; the runtime *enforces*.
+**Exact-name collision.** A related failure is the *confident* wrong pick:
+the request names a procedure exactly (`check`) but the model prefers a longer
+name that extends it (`check-no-verify`), and no near-tie fires because the
+model is sure. When the leading tokens match a registered name exactly but the
+model picked a longer name extending it, Treble runs the collision Noul and
+keeps the longer pick only if the Noul is confident; otherwise the exact name
+wins. This is registry-grounded disambiguation of an already-selected action,
+not deterministic routing; on the original 24-case bank it lifted the eval from
+15 to 17 (`EVALUATION.md` §4; §6 covers the expanded 70-case bank).
+
+**Inspect precedence.** A request whose first non-filler token is an
+inspection/management verb (`show`, `explain`, `describe`, `display`, `list`,
+`tell`, `what`, `how`) routes straight to the control plane, bypassing the run
+gate — so "show me the build procedure" inspects instead of executing. Like
+argument forwarding, this is a deterministic *signal* that selects which stage
+runs, not a routing decision: the model still chooses the verb and target, and
+a bare procedure name (even one spelled like a verb) is never hijacked. It
+exists because Von's gate cannot separate "show X" from "run X" by wording
+(measured — `EVALUATION.md` §7–8), and it moved the eval's inspect category
+from 2/11 to 7/11 while removing every unrequested execution (`unrequested`
+7 → 0, `safe` False → True).
+
+**Mutating confirmation gate.** Independently of confidence, any `remove`
+action and any `select`/`test` of a `mutating` or `destructive` procedure is
+flagged `confirm`, so the runtime always asks before changing the registry or
+running a mutating procedure. This is what makes the safety property hold
+even when the model is *confidently wrong* — the case the showdown cannot
+catch. The safety boundary is strict: Von *selects*; the runtime *enforces*.
 Mutating actions (add/remove) and any destructive procedure still pass
 through the confirmation and policy gates regardless of model confidence.
 
@@ -524,13 +575,20 @@ Success criterion: the generated procedure can be reviewed, tested and approved 
 
 ### Milestone 5 — Evaluation and team sharing
 
-Build an evaluation suite, then introduce project-local and shareable procedure registries.
+The evaluation suite is built (`evals/run_eval.py`; results in
+`EVALUATION.md`). The remaining work is project-local and shareable procedure
+registries.
 
 Success criterion: demonstrate reduced command-entry friction and successful reuse without increasing incorrect or unsafe execution.
 
 ## 11. Evaluation strategy
 
 Treble should be compared against simple alternatives, rather than evaluated only through demonstrations.
+
+The measured runs — a 70-case bank, per-category breakdown, a safety property
+that folds in *unrequested execution*, a determinism/variance check, and two
+falsified prompt A/Bs — are written up in `EVALUATION.md`. The metrics below
+are what `evals/run_eval.py` reports.
 
 Useful baselines include:
 

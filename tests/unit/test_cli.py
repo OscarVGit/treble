@@ -128,11 +128,23 @@ def test_show_missing(project_cwd: Path) -> None:
     assert result.exit_code == 2
 
 
-def test_remove_subcommand(project_cwd: Path) -> None:
+def test_remove_subcommand(project_cwd: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _register(project_cwd)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: True)  # approve
     result = runner.invoke(main_app, ["remove", "hello"])
     assert result.exit_code == 0
     assert not (project_cwd / ".treble" / "procedures" / "hello.yaml").exists()
+
+
+def test_remove_subcommand_declined_keeps_procedure(
+    project_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The literal `remove` confirms like the model path (no outright delete)."""
+    _register(project_cwd)
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: False)  # decline
+    result = runner.invoke(main_app, ["remove", "hello"])
+    assert result.exit_code == 4  # EXIT_DENIED
+    assert (project_cwd / ".treble" / "procedures" / "hello.yaml").exists()
 
 
 def test_explain_subcommand(project_cwd: Path) -> None:
@@ -153,7 +165,9 @@ def test_run_executes_via_von(project_cwd: Path, monkeypatch: pytest.MonkeyPatch
     result = runner.invoke(main_app, ["run", "hello"])
     assert result.exit_code == 0, result.output
     assert "hello" in result.output
-    assert [c[0] for c in client.calls] == ["judge", "choose"]
+    # bare name: the run gate is skipped by the bare-name signal; Von's
+    # run-target Choice selects the procedure.
+    assert [c[0] for c in client.calls] == ["choose"]
     assert (project_cwd / ".treble" / "audit.jsonl").exists()
 
 
@@ -244,7 +258,7 @@ def test_bare_intent_dispatches_to_run(
         assert exc.value.code in (0, None)
     finally:
         sys.argv = original
-    assert [c[0] for c in client.calls] == ["judge", "choose"]
+    assert [c[0] for c in client.calls] == ["choose"]
 
 
 def test_freeform_control_command_routes_to_von(
@@ -283,4 +297,6 @@ def test_freeform_control_command_routes_to_von(
     finally:
         sys.argv = original
     assert "executable: echo" in capsys.readouterr().out
-    assert [c[0] for c in client.calls] == ["judge", "choose", "choose"]
+    # The leading "show" is an inspect-precedence signal, so the run gate is
+    # bypassed and the control path runs directly: verb Choice + target Choice.
+    assert [c[0] for c in client.calls] == ["choose", "choose"]
