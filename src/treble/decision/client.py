@@ -101,6 +101,13 @@ class HttpSystemOneClient:
 def default_client(config: TrebleConfig) -> SystemOneClient:
     """Build the default HTTP client from resolved configuration.
 
-    Centralised so tests can monkeypatch a single factory.
+    Works for any ``/v1/systemone`` backend: the local Von server, or TypeSafe
+    Jev behind an API key (``TYPESAFE_API`` / ``TREBLE_API_KEY``). Centralised so
+    tests can monkeypatch a single factory.
     """
-    return HttpSystemOneClient(config.von_base_url, timeout_s=config.von_timeout_s)
+    return HttpSystemOneClient(
+        config.von_base_url,
+        timeout_s=config.von_timeout_s,
+        model=config.model,
+        api_key=config.api_key,
+    )

@@ -1,12 +1,12 @@
 # Treble decision-model evaluation
 
-Results log for the routing eval (`evals/run_eval.py`) against the live Von
-1.3 server (395M, local MPS) and the scenario bank in
-`evals/scenarios/routing.yaml`. Every entry is a hypothesis that was run and
-recorded, including the ones that failed.
+Results log for the routing eval (`evals/run_eval.py`) against a live decision
+backend — Von 1.3 (local MPS) by default, or TypeSafe Jev over the API (§11) —
+and the scenario bank in `evals/scenarios/routing.yaml`. Every entry is a
+hypothesis that was run and recorded, including the ones that failed.
 
 Entries 1–5 were measured on the original 24-case bank. **The bank has since
-grown to 73 cases — §6–§9 are the current reference.**
+grown to 73 cases — §6–§11 are the current reference.**
 
 ## What the harness measures
 
@@ -335,6 +335,69 @@ The remaining 9 wrong (plus 1 clarify, 1 escalate) now cluster cleanly:
 - **expectation nuances (2)** — `remove-near-duplicate-must-clarify`,
   `destructive-phrasing-clarify-or-escalate`.
 
+## 11. Backend comparison — Von (local) vs Jev (TypeSafe API)
+
+Treble routes through any ``/v1/systemone`` backend; the decision layer only
+knows the ``SystemOneClient`` protocol (``judge``/``choose``). Swapping the
+backend is configuration — no code change:
+
+```bash
+export TREBLE_DECISION_URL="https://api.typesafe.ai/v1/systemone"
+export TYPESAFE_API_KEY="<key>"          # or TYPESAFE_API
+export TREBLE_MODEL="jev-latest"
+export TREBLE_TIMEOUT_S=30               # remote is slower than local
+```
+
+The Jev request/response wire format is identical to Von's (``state``/``model``/
+``questions`` with ``choice``/``noul``; ``answers.<id>`` with
+``choice``/``probabilities``/``confidence`` and ``noul``). One adaptation was
+already in place: Jev returns ``noul`` without ``noul_raw``, and the parser
+falls back to ``noul`` — correct, since Jev's ``noul`` is already a calibrated
+probability (Von's is banded with a separate raw posterior). Jev's extra
+``model``/``usage``/``score`` fields are ignored.
+
+Same 73-case bank, same Treble code, same safety gates:
+
+| category | Von (local) | Jev (API) |
+| --- | --- | --- |
+| `bare` | 8/8 | 8/8 |
+| `verbatim` | 7/8 | **8/8** |
+| `nl-run` | 10/10 | 10/10 |
+| `near-dup` | 5/5 | 5/5 |
+| `nl-inspect` | 7/11 | **9/11** |
+| `control` | 5/7 | **7/7** |
+| `remove` | 6/7 | 6/7 |
+| `ood` | 4/5 | 4/5 |
+| `edge` | 7/8 | 7/8 |
+| `safety` | 0/1 | 0/1 |
+| `traps` | 3/3 | 3/3 |
+| **total** | **62/73** | **67/73** |
+| wrong | 9 | 3 |
+| safe / unrequested | True / 0 | True / 0 |
+| avg latency | ~100 ms | ~477 ms |
+| model calls / run | 142 | 133 |
+| stability | stable ×3 | stable ×3 |
+
+**Reading.** Jev closes the two clusters Von struggled with — `control`
+(5→7: `show` vs `explain`/`list`) and `nl-inspect` (7→9) — plus the last
+`verbatim` miss (`git status`), landing 67/73 with only 3 wrong. Both backends
+keep `safe=True` and `unrequested=0`: the mutating-confirmation gate,
+inspect-precedence guard, bare-name resolution and collision showdown are
+backend-independent (they're in Treble, not the model).
+
+Two behavioural differences worth noting:
+- **Sharper distributions → fewer calls.** Jev returns near-one-hot choice
+  probabilities (`1.0 / 0.0`), so the near-tie showdown rarely fires (142 → 133
+  model calls). The Von-tuned thresholds (`0.35` gate, `0.4` confidence,
+  `0.08` margin) needed **no retuning**.
+- **Latency.** Jev is a remote keyed API at ~4–5× Von's latency; Von is local
+  and free but weaker. This is the intended trade, and Treble's abstraction
+  makes it a one-line swap.
+
+Jev's residual misses are mostly the *debatable* expectations
+(`clarify` vs `escalate` on the near-duplicate/destructive cases) plus
+`single-procedure-unrelated` and `nl-what-does-build-do`.
+
 ## How the safety rails performed
 
 - **Argument forwarding** and literal sub-commands cover 100% of their
@@ -375,9 +438,15 @@ The remaining 9 wrong (plus 1 clarify, 1 escalate) now cluster cleanly:
 ## How to reproduce
 
 ```bash
-python evals/run_eval.py evals/scenarios/routing.yaml --results /tmp/default.jsonl
+# Local Von backend (default):
+python evals/run_eval.py evals/scenarios/routing.yaml --repeat 3 \
+    --results /tmp/von.jsonl
 python evals/run_eval.py evals/scenarios/routing.yaml --variant folded \
     --results /tmp/folded.jsonl
-python evals/run_eval.py evals/scenarios/routing.yaml --variant compact-gate \
-    --results /tmp/compact.jsonl
+
+# TypeSafe Jev backend (same code, different config — see §11):
+TREBLE_DECISION_URL="https://api.typesafe.ai/v1/systemone" \
+TYPESAFE_API_KEY="<key>" TREBLE_MODEL="jev-latest" TREBLE_TIMEOUT_S=30 \
+python evals/run_eval.py evals/scenarios/routing.yaml --repeat 3 \
+    --results /tmp/jev.jsonl
 ```

@@ -44,6 +44,8 @@ def doctor_cmd(
 
     typer.echo(f"python        {sys.version.split()[0]}")
     typer.echo(f"von url       {cfg.von_base_url}")
+    typer.echo(f"model         {cfg.model}")
+    typer.echo(f"api key       {'set' if cfg.api_key else 'none'}")
     typer.echo(f"variant       {cfg.variant}")
     if _mcp_installed():
         typer.echo("mcp           available (treble-mcp)")

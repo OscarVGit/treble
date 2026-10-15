@@ -3,9 +3,11 @@
 **Status:** Implemented MVP — Milestones 1–2 complete, Milestone 5 half-complete, Milestones 3–4 pending (see §10)
 **Working name:** Treble
 **Primary implementation language:** Python (requires ≥ 3.11)
-**Runtime dependency:** the local Von decision-model server (open-source
-`von` weights served over `http://127.0.0.1:8765/v1/systemone`); Treble fails
-closed when Von is unreachable
+**Runtime dependency:** a decision-model server speaking the `/v1/systemone`
+protocol — the local open-source Von server, or TypeSafe Jev behind an API key.
+Selected by config (`TREBLE_DECISION_URL`, `TYPESAFE_API_KEY`, `TREBLE_MODEL`;
+`EVALUATION.md` §11 compares the two backends). Treble fails closed when the
+backend is unreachable.
 **Core principle:** Deterministic execution, decision-model routing, LLM-assisted exception handling.
 
 ## 1. Overview
@@ -387,8 +389,11 @@ routing time.
 
 ### Layer 4 — Von decision model
 
-Von routes the **ambiguous middle** of every free-form request. Around it sit
-a small number of explicit, deterministic signals for forms that are
+Von routes the **ambiguous middle** of every free-form request. (Von here is
+the deployed backend; the layer is backend-agnostic — any `/v1/systemone`
+service works, including TypeSafe Jev over an API key, selected by config.
+`EVALUATION.md` §11 compares them; same code, same gates.) Around it sit a
+small number of explicit, deterministic signals for forms that are
 unambiguous — they select *which stage* runs, never the action itself, and
 never execute anything:
 
