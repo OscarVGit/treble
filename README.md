@@ -93,7 +93,7 @@ The sections below describe the target product. What is **currently built**
   the routing decision). `treble stats` (or `--json`) summarizes requests,
   routing distribution, first-try success, latency, hot and unused procedures.
 - **Test/eval harness**: `pytest` (unit + integration),
-  `scripts/smoke_test.sh` (end-to-end CLI), and a 73-case confusion-matrix
+  `scripts/smoke_test.sh` (end-to-end CLI), and a 69-case confusion-matrix
   eval suite (`evals/run_eval.py`) with per-category breakdown, a safety
   property that includes *unrequested execution* (running when the user asked
   only to inspect), a determinism/variance check (`--repeat`), JSONL result

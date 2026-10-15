@@ -123,7 +123,7 @@ python evals/diagnose.py evals/scenarios/routing.yaml --category nl-inspect \
 
 ## Scenario bank
 
-`scenarios/routing.yaml` currently holds 73 cases across categories, so an
+`scenarios/routing.yaml` currently holds 69 cases across categories, so an
 A/B delta is signal rather than one hand-picked example:
 
 - **bare names / aliases / token shapes** — exact, hyphenated, capitalized,

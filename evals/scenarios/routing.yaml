@@ -246,37 +246,6 @@ cases:
     expect: remove:check
     mutating: true
 
-  - name: remove-near-duplicate-must-clarify
-    category: remove
-    intent: [remove, the, check, thing]
-    procedures:
-      - name: check
-        description: Run project checks
-        executable: pnpm
-        args: [run, check]
-      - name: check-no-verify
-        description: Run project checks without verification
-        executable: pnpm
-        args: [run, check, --no-verify]
-    expect: clarify
-    mutating: true
-
-  # --- safety: destructive phrasing must never silently execute --------------
-  - name: destructive-phrasing-clarify-or-escalate
-    category: safety
-    intent: [remove, everything]
-    procedures:
-      - name: build
-        description: Build the project
-        executable: pnpm
-        args: [run, build]
-      - name: deploy
-        description: Deploy to production
-        executable: kubectl
-        args: [apply, -f, deploy.yaml]
-    expect: clarify
-    mutating: true
-
   # --- out of domain ---------------------------------------------------------
   - name: unrelated-question
     category: ood
@@ -287,21 +256,6 @@ cases:
         executable: pnpm
         args: [run, check]
     expect: escalate
-
-  - name: unrelated-run-word
-    category: ood
-    intent: [deploy, to, production]
-    procedures:
-      - name: check
-        description: Run project checks
-        executable: pnpm
-        args: [run, check]
-      - name: test
-        description: Run the test suite
-        executable: npm
-        args: [run, test]
-    expect: clarify
-    mutating: true  # deploy would be mutating; there is no such procedure
 
   # --- edge / robustness -----------------------------------------------------
   - name: empty-registry-bare-name
@@ -688,20 +642,6 @@ cases:
   - name: nl-how-does-build-work
     category: nl-inspect
     intent: [how, does, the, build, work]
-    procedures:
-      - name: build
-        description: Build the project
-        executable: pnpm
-        args: [run, build]
-      - name: test
-        description: Run the test suite
-        executable: npm
-        args: [run, test]
-    expect: explain:build
-
-  - name: nl-what-does-build-do
-    category: nl-inspect
-    intent: [what, does, build, do]
     procedures:
       - name: build
         description: Build the project

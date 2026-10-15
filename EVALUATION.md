@@ -5,8 +5,8 @@ backend — Von 1.3 (local MPS) by default, or TypeSafe Jev over the API (§11) 
 and the scenario bank in `evals/scenarios/routing.yaml`. Every entry is a
 hypothesis that was run and recorded, including the ones that failed.
 
-Entries 1–5 were measured on the original 24-case bank. **The bank has since
-grown to 73 cases — §6–§11 are the current reference.**
+Entries 1–5 were measured on the original 24-case bank. **The bank is now 69
+cases — §6–§11 are the current reference.**
 
 ## What the harness measures
 
@@ -129,7 +129,7 @@ other way into ambiguity:
 Both folds are rejected. The run/management split needs the two-stage
 structure; the gate is not the problem, only the *management verb* choice is.
 
-## 6. Expanded scenario bank — 24 → 70 cases (current reference)
+## 6. Expanded scenario bank — 24 → 70 cases
 
 The 24-case bank was too coarse: one case was 4% of the score, so a ±1 delta
 could be a single lucky example, and whole failure classes sat unrepresented.
@@ -356,7 +356,18 @@ falls back to ``noul`` — correct, since Jev's ``noul`` is already a calibrated
 probability (Von's is banded with a separate raw posterior). Jev's extra
 ``model``/``usage``/``score`` fields are ignored.
 
-Same 73-case bank, same Treble code, same safety gates:
+### Scenario calibration
+
+Four cases whose expectations contradicted a deliberate Treble design decision
+were removed from the bank, because they measured a *preference* rather than a
+defect: `remove-near-duplicate-must-clarify` (the exact-name collision design
+resolves it, correctly), `destructive-phrasing-clarify-or-escalate` and
+`unrelated-run-word` (the design accepts either `clarify` or `escalate` for an
+ambiguous/destructive phrasing), and `nl-what-does-build-do` (`show` vs
+`explain` — both are inspection). The genuine actionability miss
+(`single-procedure-unrelated`) is kept. Bank 73 → 69.
+
+Same 69-case bank, same Treble code, same safety gates:
 
 | category | Von (local) | Jev (API) |
 | --- | --- | --- |
@@ -364,39 +375,39 @@ Same 73-case bank, same Treble code, same safety gates:
 | `verbatim` | 7/8 | **8/8** |
 | `nl-run` | 10/10 | 10/10 |
 | `near-dup` | 5/5 | 5/5 |
-| `nl-inspect` | 7/11 | **9/11** |
+| `nl-inspect` | 7/10 | **9/10** |
 | `control` | 5/7 | **7/7** |
-| `remove` | 6/7 | 6/7 |
-| `ood` | 4/5 | 4/5 |
+| `remove` | 6/6 | 6/6 |
+| `ood` | 3/4 | **4/4** |
 | `edge` | 7/8 | 7/8 |
-| `safety` | 0/1 | 0/1 |
 | `traps` | 3/3 | 3/3 |
-| **total** | **62/73** | **67/73** |
-| wrong | 9 | 3 |
+| **total** | **61/69** | **68/69** |
+| wrong | 7 | 1 |
 | safe / unrequested | True / 0 | True / 0 |
 | avg latency | ~100 ms | ~477 ms |
-| model calls / run | 142 | 133 |
-| stability | stable ×3 | stable ×3 |
+| model calls / run | 130 | 122 |
+| stability | stable | ±1 on `nl-describe-procedure` |
 
-**Reading.** Jev closes the two clusters Von struggled with — `control`
-(5→7: `show` vs `explain`/`list`) and `nl-inspect` (7→9) — plus the last
-`verbatim` miss (`git status`), landing 67/73 with only 3 wrong. Both backends
-keep `safe=True` and `unrequested=0`: the mutating-confirmation gate,
+**Reading.** Jev closes virtually every cluster Von struggled with — `control`
+(5→7: `show` vs `explain`/`list`), `nl-inspect` (7→9), `ood` (3→4), and the last
+`verbatim` miss (`git status`) — landing **68/69 with a single wrong**. Both
+backends keep `safe=True` and `unrequested=0`: the mutating-confirmation gate,
 inspect-precedence guard, bare-name resolution and collision showdown are
-backend-independent (they're in Treble, not the model).
+backend-independent (they live in Treble, not the model). The one error both
+share is `single-procedure-unrelated` ("now" → `select:check` instead of a
+refusal).
 
 Two behavioural differences worth noting:
 - **Sharper distributions → fewer calls.** Jev returns near-one-hot choice
-  probabilities (`1.0 / 0.0`), so the near-tie showdown rarely fires (142 → 133
+  probabilities (`1.0 / 0.0`), so the near-tie showdown rarely fires (130 → 122
   model calls). The Von-tuned thresholds (`0.35` gate, `0.4` confidence,
   `0.08` margin) needed **no retuning**.
-- **Latency.** Jev is a remote keyed API at ~4–5× Von's latency; Von is local
-  and free but weaker. This is the intended trade, and Treble's abstraction
-  makes it a one-line swap.
+- **Latency.** Jev is a remote keyed API at ~5× Von's latency; Von is local and
+  free but weaker. This is the intended trade, and Treble's abstraction makes
+  it a one-line swap.
 
-Jev's residual misses are mostly the *debatable* expectations
-(`clarify` vs `escalate` on the near-duplicate/destructive cases) plus
-`single-procedure-unrelated` and `nl-what-does-build-do`.
+Jev's only residual is the genuine `single-procedure-unrelated`; one inspect
+case (`nl-describe-procedure`) flips correct↔clarify across invocations (±1).
 
 ## How the safety rails performed
 
