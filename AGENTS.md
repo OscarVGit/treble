@@ -25,6 +25,11 @@ procedures (and `treble remove`) confirm before executing — pass `--yes` only
 when the action is clearly intended and safe. Confirmation follows the declared
 `risk`, not the command text.
 
+If your client speaks MCP, the `treble-mcp` server exposes the same operations
+as tools (`list_procedures`, `run`, `test`, `remove`, `stats`); a mutating tool
+call with `yes=false` returns `confirmation_required` — ask the human, then
+re-call with `yes=true`.
+
 ## Developing this repo
 
 - Setup: `python -m venv .venv && .venv/bin/pip install -e .`

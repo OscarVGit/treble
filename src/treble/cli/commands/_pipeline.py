@@ -1,7 +1,6 @@
 """Shared execution pipeline for ``treble run``.
 
-Every free-form request is routed through Von — there is no deterministic
-regex/exact-match short-circuit. The pipeline:
+Every free-form request is routed through Von. The pipeline:
 
 1. loads the enabled procedures (neutral registry order),
 2. asks Von to choose a single finite action,
@@ -12,6 +11,12 @@ regex/exact-match short-circuit. The pipeline:
 If Von is unreachable the pipeline fails closed: it returns
 ``EXIT_VON_UNAVAILABLE`` and never falls back to string matching.
 
+I/O is injectable (``PipelineIO``): the CLI leaves it unset and falls through to
+``typer`` (interactive prompts, coloured output); a non-interactive front-end
+(the MCP server) installs a capture whose ``confirm`` raises so a mutating
+action returns ``confirmation_required`` instead of blocking on a TTY. Both
+front-ends call the *same* functions below — identical options and pathway.
+
 Safety boundary: Von *selects*; the runtime *enforces*. Mutating actions
 honour ``--dry-run`` and the confirmation/policy gates regardless of how
 confident the model was.
@@ -20,6 +25,9 @@ confident the model was.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -49,6 +57,47 @@ EXIT_VON_UNAVAILABLE = 6
 EXIT_CLARIFY = 7
 
 
+# -- injectable I/O -----------------------------------------------------------
+
+
+class ConfirmationRequired(Exception):
+    """Raised by a non-interactive ``confirm`` when a prompt would be shown."""
+
+    def __init__(self, prompt: str) -> None:
+        super().__init__(prompt)
+        self.prompt = prompt
+
+
+@dataclass
+class PipelineIO:
+    """Output/confirmation sinks. ``None`` fields fall back to ``typer``."""
+
+    out: Callable[[str], None] | None = None
+    err: Callable[[str], None] | None = None
+    confirm: Callable[[str], bool] | None = None
+
+
+IO: ContextVar[PipelineIO | None] = ContextVar("treble_pipeline_io", default=None)
+
+
+def _emit(text: str = "", *, err: bool = False, color: str | None = None, nl: bool = True) -> None:
+    io = IO.get()
+    sink = None
+    if io is not None:
+        sink = io.err if err else io.out
+    if sink is not None:
+        sink(text + ("\n" if nl else ""))
+    else:
+        typer.secho(text, fg=color, err=err, nl=nl)
+
+
+def _confirm(prompt: str) -> bool:
+    io = IO.get()
+    if io is not None and io.confirm is not None:
+        return io.confirm(prompt)
+    return typer.confirm(prompt)
+
+
 def _log_event(
     cwd: Path | None,
     *,
@@ -75,6 +124,88 @@ def _log_event(
         )
     except OSError:
         pass
+
+
+# -- shared operations (called by both the CLI and the MCP server) ------------
+
+
+def list_procedures(*, cwd: Path | None = None) -> int:
+    """Print every visible procedure (``treble list``)."""
+    _list(ProcedureStore(cwd))
+    _log_event(cwd, source="literal", action="list", target=None, exit_code=EXIT_OK)
+    return EXIT_OK
+
+
+def show_procedure(name: str, *, cwd: Path | None = None) -> int:
+    """Print one procedure as YAML (``treble show``)."""
+    procedure = _resolve(ProcedureStore(cwd), name)
+    if procedure is None:
+        return EXIT_NO_MATCH
+    _show(procedure)
+    _log_event(cwd, source="literal", action="show", target=procedure.name, exit_code=EXIT_OK)
+    return EXIT_OK
+
+
+def explain_procedure(name: str, *, cwd: Path | None = None) -> int:
+    """Print a procedure's execution plan (``treble explain``)."""
+    procedure = _resolve(ProcedureStore(cwd), name)
+    if procedure is None:
+        return EXIT_NO_MATCH
+    _explain(procedure, cwd)
+    _log_event(
+        cwd, source="literal", action="explain", target=procedure.name, exit_code=EXIT_OK
+    )
+    return EXIT_OK
+
+
+def run_intent(
+    tokens: list[str],
+    *,
+    cwd: Path | None = None,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+    policy: SafetyPolicy | None = None,
+    client: SystemOneClient | None = None,
+    variant: str | None = None,
+) -> int:
+    """Route and dispatch free-form ``tokens`` (``treble <intent>``)."""
+    return run_pipeline(
+        tokens,
+        cwd=cwd,
+        dry_run=dry_run,
+        assume_yes=assume_yes,
+        policy=policy,
+        client=client,
+        variant=variant,
+    )
+
+
+def run_named(
+    name: str,
+    *,
+    cwd: Path | None = None,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+    policy: SafetyPolicy | None = None,
+) -> int:
+    """Run a procedure by name, bypassing Von (``treble test NAME``)."""
+    return run_procedure_by_name(
+        name, cwd=cwd, dry_run=dry_run, assume_yes=assume_yes, policy=policy
+    )
+
+
+def remove_named(
+    name: str,
+    *,
+    cwd: Path | None = None,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+) -> int:
+    """Remove a procedure by name (``treble remove NAME``)."""
+    return remove_procedure_by_name(name, cwd=cwd, dry_run=dry_run, assume_yes=assume_yes)
+
+
+# -- core ---------------------------------------------------------------------
 
 
 def run_pipeline(
@@ -128,12 +259,12 @@ def run_pipeline(
     try:
         outcome = decide(tokens, procedures, client, cwd=cwd, variant=chosen_variant)
     except (httpx.HTTPError, httpx.RequestError, OSError) as exc:
-        typer.secho(
+        _emit(
             "Treble's decision service is unreachable "
             f"({exc.__class__.__name__}). Treble could not route the request; "
             "start the decision service and retry.",
-            fg="red",
             err=True,
+            color="red",
         )
         _log_event(
             cwd,
@@ -272,7 +403,7 @@ def _dispatch(
         return EXIT_OK
 
     if outcome_action is Action.ADD_PROCEDURE:
-        typer.echo(
+        _emit(
             "To add a procedure, register it explicitly (reviewed before use):\n"
             "  treble-add --name <name> --command '<exact command>' "
             "--description '<what it does>'"
@@ -284,14 +415,14 @@ def _dispatch(
         return EXIT_CLARIFY
 
     if outcome_action is Action.REJECT:
-        typer.secho("request rejected by policy", fg="red", err=True)
+        _emit("request rejected by policy", err=True, color="red")
         return EXIT_DENIED
 
     # Action.ESCALATE and anything unrecognised.
-    typer.secho(
+    _emit(
         "no suitable action: Treble could not match the request to a registered "
         "procedure or command.",
-        fg="yellow",
+        color="yellow",
     )
     return EXIT_NEEDS_DECISION
 
@@ -301,12 +432,12 @@ def _dispatch(
 
 def _resolve(store: ProcedureStore, name: str | None) -> Procedure | None:
     if not name:
-        typer.secho("Treble chose an action without a target procedure", fg="red", err=True)
+        _emit("Treble chose an action without a target procedure", err=True, color="red")
         return None
     try:
         return store.get(name)
     except ProcedureNotFound:
-        typer.secho(f"no procedure named {name!r}", fg="red", err=True)
+        _emit(f"no procedure named {name!r}", err=True, color="red")
         return None
 
 
@@ -343,24 +474,24 @@ def _run_procedure(
             )
         else:
             prompt = f"Treble is unsure about this pick. Run {procedure.name!r}? argv={full_argv}"
-        if not typer.confirm(prompt):
-            typer.secho(f"cancelled {procedure.name!r}", fg="yellow")
+        if not _confirm(prompt):
+            _emit(f"cancelled {procedure.name!r}", color="yellow")
             return EXIT_CLARIFY
 
     decision = policy.decide(procedure)
     if decision is PolicyDecision.DENY:
-        typer.secho(f"policy denies execution of {procedure.name!r}", fg="red", err=True)
+        _emit(f"policy denies execution of {procedure.name!r}", err=True, color="red")
         return EXIT_DENIED
-    if decision is PolicyDecision.CONFIRM and not (assume_yes or dry_run):
-        confirmed = typer.confirm(
-            f"Run {procedure.name!r} ({procedure.risk})? argv={full_argv}"
-        )
-        if not confirmed:
-            return EXIT_DENIED
+    if (
+        decision is PolicyDecision.CONFIRM
+        and not (assume_yes or dry_run)
+        and not _confirm(f"Run {procedure.name!r} ({procedure.risk})? argv={full_argv}")
+    ):
+        return EXIT_DENIED
 
     if dry_run:
-        typer.echo(f"[dry-run] would execute: {' '.join(full_argv)}")
-        typer.echo(f"[dry-run] cwd: {procedure.working_dir or (cwd or Path.cwd())}")
+        _emit(f"[dry-run] would execute: {' '.join(full_argv)}")
+        _emit(f"[dry-run] cwd: {procedure.working_dir or (cwd or Path.cwd())}")
         return EXIT_OK
 
     result = execute(procedure, cwd=cwd, extra_args=extra_args)
@@ -383,9 +514,9 @@ def _run_procedure(
     )
 
     if result.stdout:
-        typer.echo(result.stdout, nl=False)
+        _emit(result.stdout, nl=False)
     if result.stderr:
-        typer.echo(result.stderr, err=True, nl=False)
+        _emit(result.stderr, err=True, nl=False)
 
     if not outcome.passed:
         _report_failure(procedure, result, outcome)
@@ -401,22 +532,22 @@ def _report_failure(procedure: Procedure, result, outcome) -> None:
     """
     executable = result.argv[0] if result.argv else procedure.executable or "?"
     for failure in outcome.failures:
-        typer.secho(f"verification: {failure}", fg="red", err=True)
+        _emit(f"verification: {failure}", err=True, color="red")
 
     if result.exit_code in (127,) or (result.error and "No such file" in result.error):
-        typer.secho(
+        _emit(
             f"command {executable!r} was not found on PATH (exit 127). "
             "Install it, put it on PATH, or register a procedure that uses an "
             "available executable.",
-            fg="yellow",
             err=True,
+            color="yellow",
         )
     elif "ENOENT" in (result.stderr or ""):
-        typer.secho(
+        _emit(
             "command failed with ENOENT — did you run it in the right working "
             "directory (e.g. a project containing package.json)?",
-            fg="yellow",
             err=True,
+            color="yellow",
         )
 
 
@@ -427,12 +558,12 @@ def _remove(
     if procedure is None:
         return EXIT_NO_MATCH
     if dry_run:
-        typer.echo(f"[dry-run] would remove {procedure.name!r}")
+        _emit(f"[dry-run] would remove {procedure.name!r}")
         return EXIT_OK
-    if not assume_yes and not typer.confirm(f"Remove {procedure.name!r}?"):
+    if not assume_yes and not _confirm(f"Remove {procedure.name!r}?"):
         return EXIT_DENIED
     path = store.remove(procedure.name)
-    typer.echo(f"removed {procedure.name!r} ({path})")
+    _emit(f"removed {procedure.name!r} ({path})")
     return EXIT_OK
 
 
@@ -441,31 +572,31 @@ def _show(procedure: Procedure) -> None:
 
     from treble.registry.models import procedure_to_yaml_dict
 
-    typer.echo(yaml.safe_dump(procedure_to_yaml_dict(procedure), sort_keys=False))
+    _emit(yaml.safe_dump(procedure_to_yaml_dict(procedure), sort_keys=False), nl=False)
 
 
 def _explain(procedure: Procedure, cwd: Path | None) -> None:
-    typer.echo(f"procedure: {procedure.name}")
-    typer.echo(f"argv:      {' '.join(procedure.invocation())}")
-    typer.echo(f"risk:      {procedure.risk}")
-    typer.echo(f"cwd:       {procedure.working_dir or (cwd or Path.cwd())}")
+    _emit(f"procedure: {procedure.name}")
+    _emit(f"argv:      {' '.join(procedure.invocation())}")
+    _emit(f"risk:      {procedure.risk}")
+    _emit(f"cwd:       {procedure.working_dir or (cwd or Path.cwd())}")
     if procedure.verify.expected_exit_code != 0:
-        typer.echo(f"verify:    exit code must be {procedure.verify.expected_exit_code}")
+        _emit(f"verify:    exit code must be {procedure.verify.expected_exit_code}")
 
 
 def _list(store: ProcedureStore) -> None:
     procedures = store.list_all()
     if not procedures:
-        typer.echo("no procedures registered")
+        _emit("no procedures registered")
         return
     for proc in procedures:
-        typer.echo(f"{proc.name:24s} [{proc.scope:8s}] [{proc.risk:11s}] {proc.description}")
+        _emit(f"{proc.name:24s} [{proc.scope:8s}] [{proc.risk:11s}] {proc.description}")
 
 
 def _print_clarification(outcome) -> None:
     """Show the top options Treble considered so the user can disambiguate."""
-    typer.secho("ambiguous request — Treble's top candidates:", fg="yellow")
+    _emit("ambiguous request — Treble's top candidates:", color="yellow")
     ranked = sorted(outcome.probabilities.items(), key=lambda kv: kv[1], reverse=True)
     for key, prob in ranked[:4]:
         description = outcome.options.get(key, "")
-        typer.echo(f"  {prob:0.2f}  {key:32s} {description}")
+        _emit(f"  {prob:0.2f}  {key:32s} {description}")

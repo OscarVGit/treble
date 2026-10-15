@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from urllib.parse import urlparse, urlunparse
 
@@ -10,6 +11,10 @@ import typer
 
 from treble.config import TrebleConfig
 from treble.registry import InvalidProcedure, ProcedureStore
+
+
+def _mcp_installed() -> bool:
+    return importlib.util.find_spec("mcp") is not None
 
 
 def _health_url(base_url: str) -> str:
@@ -40,6 +45,10 @@ def doctor_cmd(
     typer.echo(f"python        {sys.version.split()[0]}")
     typer.echo(f"von url       {cfg.von_base_url}")
     typer.echo(f"variant       {cfg.variant}")
+    if _mcp_installed():
+        typer.echo("mcp           available (treble-mcp)")
+    else:
+        typer.echo("mcp           not installed (pip install 'treble[mcp]')")
 
     if von:
         if _von_reachable(cfg.von_base_url):

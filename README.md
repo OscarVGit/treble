@@ -262,6 +262,34 @@ Because these call `treble test <name>` (deterministic), they run in CI without
 Von. For an agent, add the paragraph from `AGENTS.md` so it prefers the registry
 over re-deriving flags.
 
+### 4.5 Using Treble from an agent (MCP)
+
+Treble ships an MCP server that exposes the registry as tools, so an agent gets
+the **same options and pathway as a human** — the tools call the same
+operations the CLI does.
+
+```bash
+pipx install git+https://github.com/OscarVGit/treble
+pipx inject treble mcp            # add the MCP SDK (the `mcp` extra)
+```
+
+Point your client at the stdio server (Claude Desktop / opencode style):
+
+```json
+{ "mcpServers": { "treble": { "command": "treble-mcp" } } }
+```
+
+Tools mirror the CLI 1:1: `list_procedures`, `show_procedure`,
+`explain_procedure`, `run` (natural-language intent or bare name), `test` (by
+name), `remove`, `stats` — each taking the same `dry_run`/`yes` options.
+
+**Confirmation.** A mutating or destructive action with `yes=false` does **not**
+execute: the tool returns `status: "confirmation_required"` with the prompt, and
+the agent is expected to ask the human, then re-call with `yes=true` — the exact
+equivalent of a human typing `--yes`. The agent holds the same authority as the
+human; the tool descriptions implore it to confirm first. (Read-only procedures
+run with no prompt, exactly as for a human.)
+
 ## 5. Architecture
 
 Treble should follow a deterministic-first architecture.
