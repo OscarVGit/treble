@@ -4,10 +4,10 @@
 **Working name:** Treble
 **Primary implementation language:** Python (requires ≥ 3.11)
 **Runtime dependency:** a decision-model server speaking the `/v1/systemone`
-protocol — the local open-source Von server, or TypeSafe Jev behind an API key.
-Selected by config (`TREBLE_DECISION_URL`, `TYPESAFE_API_KEY`, `TREBLE_MODEL`;
-`EVALUATION.md` §11 compares the two backends). Treble fails closed when the
-backend is unreachable.
+protocol — the local open-source Von server, TypeSafe Jev behind an API key, or
+the distilled local `treble-400m` checkpoint. Selected by config
+(`TREBLE_DECISION_URL`, `TYPESAFE_API_KEY`, `TREBLE_MODEL`; `EVALUATION.md` §11
+compares the backends). Treble fails closed when the backend is unreachable.
 **Core principle:** Deterministic execution, decision-model routing, LLM-assisted exception handling.
 
 ## 1. Overview
@@ -391,8 +391,9 @@ routing time.
 
 Von routes the **ambiguous middle** of every free-form request. (Von here is
 the deployed backend; the layer is backend-agnostic — any `/v1/systemone`
-service works, including TypeSafe Jev over an API key, selected by config.
-`EVALUATION.md` §11 compares them; same code, same gates.) Around it sit a
+service works, including TypeSafe Jev over an API key or the distilled local
+`treble-400m` checkpoint, selected by config. `EVALUATION.md` §11 compares
+them; same code, same gates.) Around it sit a
 small number of explicit, deterministic signals for forms that are
 unambiguous — they select *which stage* runs, never the action itself, and
 never execute anything:

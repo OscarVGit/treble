@@ -335,7 +335,7 @@ The remaining 9 wrong (plus 1 clarify, 1 escalate) now cluster cleanly:
 - **expectation nuances (2)** — `remove-near-duplicate-must-clarify`,
   `destructive-phrasing-clarify-or-escalate`.
 
-## 11. Backend comparison — Von (local) vs Jev (TypeSafe API)
+## 11. Backend comparison — Von, Jev, and a distilled local model
 
 Treble routes through any ``/v1/systemone`` backend; the decision layer only
 knows the ``SystemOneClient`` protocol (``judge``/``choose``). Swapping the
@@ -408,6 +408,36 @@ Two behavioural differences worth noting:
 
 Jev's only residual is the genuine `single-procedure-unrelated`; one inspect
 case (`nl-describe-procedure`) flips correct↔clarify across invocations (±1).
+
+### Distilled local model (`treble-400m`)
+
+A separate project, [`treble-distill`](https://github.com/OscarVGit/treble-distill),
+distills a teacher into a **local Von checkpoint** specialized for Treble's
+primitives: ModernBERT-large + Option-Marker (~395M), Level-2 continue-train
+(**not** LoRA), then confidence refit with `von calibrate`. Teacher: **DeepSeek
+`deepseek-chat`** (TypeSafe/Jev terms disallow distillation). Serving is
+unchanged — `VON_CHECKPOINT_DIR=... von serve`, then point `TREBLE_DECISION_URL`
+at it. Treble itself does not change.
+
+On the same 69-case development bank:
+
+| model | where | correct | wrong | latency |
+| --- | --- | --- | --- | --- |
+| base Von 1.2 | local | 61/69 | 7 | ~100 ms |
+| Jev | hosted | 67/69 | 1 | ~477 ms |
+| DeepSeek teacher | hosted | 67/69 | 2 | ~1.7 s |
+| **treble-400m** | **local** | **67/69** | **1** | **~90 ms** |
+
+`safe=True`, `unrequested=0`; 94% per-case agreement with the teacher. Cost to
+reach v4: **< $1.50**.
+
+**Caveat (from its model card).** The 69-case bank is a *development/regression*
+suite, not a sealed holdout: 10 cases share an exact `(state, question)` with
+training/val, and the bank informed data iteration. Excluding those,
+`treble-400m` and the teacher both score **57/59**. Teacher parity holds on the
+uncontaminated subset; the 67/69 headline is **not** a generalization claim. A
+sealed evaluation set is pending. Details: `docs/model-card.md` and
+`docs/training.md` in the `treble-distill` repo.
 
 ## How the safety rails performed
 
