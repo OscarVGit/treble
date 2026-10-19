@@ -407,6 +407,26 @@ equivalent of a human typing `--yes`. The agent holds the same authority as the
 human; the tool descriptions implore it to confirm first. (Read-only procedures
 run with no prompt, exactly as for a human.)
 
+**Why this helps agents.**
+
+- **A curated tool surface, not a raw shell.** The agent gets named, reviewed
+  actions from the registry instead of arbitrary shell access — the registry is
+  the allowlist.
+- **Bounded, deterministic execution.** Selection is over a finite action set;
+  each action stores an exact argv, so the same request produces the same
+  command, not a freshly generated one.
+- **Safety for autonomous actions.** Declared risk gates destructive actions;
+  every execution is audited; `--dry-run` previews; fail-closed when the router
+  is down.
+- **Shared, consistent knowledge.** The registry is committed, so every agent,
+  session and teammate sees the same known-good invocations — no re-derivation
+  and no drift.
+- **Local, fast, private.** Routing can run on a local decision model (~90 ms,
+  no API key, registry stays on-device); the hosted backends remain available
+  when you want them.
+- **Parity with humans.** The MCP tools call the same functions as the CLI, so
+  behavior and safety are identical regardless of who invokes them.
+
 ## 5. Architecture
 
 Treble should follow a deterministic-first architecture.
