@@ -134,12 +134,12 @@ treble "export last month's orders as parquet"  # selects export-orders
 ```bash
 treble-add "docker compose -f docker-compose.dev.yml --profile dev up -d --build" \
   --name services-up \
-  --description "Start local services with docker compose (dev profile)" \
+  --description "Start Docker Compose services (docker compose up, dev profile)" \
   --risk mutating
 
 treble-add "docker compose -f docker-compose.dev.yml --profile dev down --volumes --remove-orphans" \
   --name services-down \
-  --description "Stop local services and remove volumes" \
+  --description "Stop Docker Compose services and remove volumes (docker compose down)" \
   --risk destructive
 ```
 
@@ -152,6 +152,11 @@ treble docker down    # -> services-down (confirms: destructive)
 
 No need to remember `-f docker-compose.dev.yml --profile dev --remove-orphans`,
 or which of the two teardown commands actually removes the volumes.
+
+These examples were verified against the distilled local model; routing quality
+is backend-dependent (`EVALUATION.md` §11). Write descriptions that contain the
+words people actually use ("docker compose up") — it makes routing robust across
+backends.
 
 **What the model does and does not do.** It selects among registered actions; it
 does not synthesize new arguments. Each procedure stores the exact invocation.

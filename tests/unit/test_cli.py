@@ -356,3 +356,34 @@ def test_freeform_control_command_routes_to_von(
     # The leading "show" is an inspect-precedence signal, so the run gate is
     # bypassed and the control path runs directly: verb Choice + target Choice.
     assert [c[0] for c in client.calls] == ["choose", "choose"]
+
+
+# -- command splitting (Windows paths) --------------------------------------
+
+
+def test_split_command_preserves_windows_paths(monkeypatch) -> None:
+    from treble.cli.add import _split_command
+
+    monkeypatch.setattr("treble.cli.add.os.name", "nt")
+    argv = _split_command(
+        r'powershell -File C:\tools\run_macro.ps1 -Workbook "C:\Program Files\sales.xlsm"'
+    )
+    assert argv == [
+        "powershell",
+        "-File",
+        r"C:\tools\run_macro.ps1",
+        "-Workbook",
+        r"C:\Program Files\sales.xlsm",
+    ]
+
+
+def test_split_command_posix_unchanged(monkeypatch) -> None:
+    from treble.cli.add import _split_command
+
+    monkeypatch.setattr("treble.cli.add.os.name", "posix")
+    assert _split_command("pnpm run check --no-verify") == [
+        "pnpm",
+        "run",
+        "check",
+        "--no-verify",
+    ]

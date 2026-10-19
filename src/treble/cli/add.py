@@ -6,6 +6,7 @@ The exact argument placement the user provides is preserved verbatim.
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 
@@ -27,6 +28,25 @@ app = typer.Typer(
 )
 
 
+def _split_command(command: str) -> list[str]:
+    """Split a command line into argv.
+
+    POSIX ``shlex`` treats backslash as an escape, which silently mangles
+    Windows paths (``C:\\tools\\x.ps1`` -> ``C:toolsx.ps1``). On Windows we split
+    without POSIX escapes and strip one layer of surrounding quotes so quoted
+    paths with spaces survive.
+    """
+    if os.name != "nt":
+        return shlex.split(command)
+    tokens = shlex.split(command, posix=False)
+    return [
+        token[1:-1]
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'"
+        else token
+        for token in tokens
+    ]
+
+
 def register(
     *,
     name: str,
@@ -39,7 +59,7 @@ def register(
     overwrite: bool = False,
 ) -> Path:
     """Core registration logic, shared between the two CLI entry points."""
-    argv = shlex.split(command)
+    argv = _split_command(command)
     if not argv:
         msg = "command must not be empty"
         raise typer.BadParameter(msg)
