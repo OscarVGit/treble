@@ -70,6 +70,97 @@ treble pnpm run check without verification
 
 Treble resolves the request against its registered procedures and selects the appropriate execution path.
 
+### What the decision model unlocks
+
+Register an exact invocation once; then ask for it in plain language. The model
+chooses among registered actions — it does not generate the command.
+
+#### A VBA macro (Windows / Office)
+
+VBA lives inside Office, so register a small wrapper that invokes it. For example
+`run_macro.ps1`:
+
+```powershell
+param($Workbook, $Macro)
+$xl = New-Object -ComObject Excel.Application
+$wb = $xl.Workbooks.Open($Workbook)
+$xl.Run($Macro)
+$wb.Close($false)
+$xl.Quit()
+```
+
+Register it once:
+
+```bash
+treble-add "powershell -NoProfile -File C:\tools\run_macro.ps1 -Workbook C:\reports\sales.xlsm -Macro GenerateMonthlyReport" \
+  --name sales-report \
+  --description "Generate the monthly sales report in Excel" \
+  --risk mutating
+```
+
+Then ask for it naturally:
+
+```bash
+treble "generate the monthly sales report"
+treble "run the sales report macro"
+```
+
+Because the declared risk is `mutating`, Treble confirms before running it.
+
+#### A custom Python script with a pile of flags
+
+```bash
+treble-add "python scripts/export_orders.py --source s3://acme/orders --preset last-month --format parquet --compress --workers 8" \
+  --name export-orders \
+  --description "Export last month's orders to compressed parquet" \
+  --risk read-only
+
+treble "export last month's orders as parquet"
+```
+
+To offer choices, register the variants and let the model pick:
+
+```bash
+treble-add "python scripts/export_orders.py --source s3://acme/orders --preset last-month --format csv --compress" \
+  --name export-orders-csv \
+  --description "Export last month's orders to compressed CSV"
+
+treble "export last month's orders as csv"   # selects export-orders-csv
+treble "export last month's orders as parquet"  # selects export-orders
+```
+
+#### Docker Compose with the flags you always forget
+
+```bash
+treble-add "docker compose -f docker-compose.dev.yml --profile dev up -d --build" \
+  --name services-up \
+  --description "Start local services with docker compose (dev profile)" \
+  --risk mutating
+
+treble-add "docker compose -f docker-compose.dev.yml --profile dev down --volumes --remove-orphans" \
+  --name services-down \
+  --description "Stop local services and remove volumes" \
+  --risk destructive
+```
+
+Loose requests now route to the registered invocations:
+
+```bash
+treble docker up      # -> services-up   (confirms: mutating)
+treble docker down    # -> services-down (confirms: destructive)
+```
+
+No need to remember `-f docker-compose.dev.yml --profile dev --remove-orphans`,
+or which of the two teardown commands actually removes the volumes.
+
+**What the model does and does not do.** It selects among registered actions; it
+does not synthesize new arguments. Each procedure stores the exact invocation.
+To support alternatives, register variants; to support parameters (dates, paths,
+worker counts), have the wrapper resolve them or forward trailing flags
+(`treble export-orders --workers 16`). The registry is committed and shared, so
+the model makes it addressable in plain language — and the runtime still gates
+anything destructive.
+
 If the intent is ambiguous, Treble asks for clarification rather than
 silently choosing a potentially destructive or incorrect command — or fails
 closed if the decision service is unreachable.
