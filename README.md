@@ -1,5 +1,21 @@
 # Treble — A Decision-Driven Command Execution Harness
 
+**Describe what you want. Treble selects a known-good procedure and runs it safely.**
+
+The hard part isn't running a command; it's knowing which one, with which flags, in
+this environment. People and coding agents both waste time re-deriving invocations,
+scrolling history, or trusting an LLM to generate shell. Treble takes intent
+instead: a small **decision model** chooses from a registry of validated actions —
+it picks, it never generates shell — and a deterministic runtime enforces risk,
+confirmation, and audit. The model is constrained to a finite action space, which
+is what makes routing safe, auditable, local, and fast; the runtime is what makes
+execution trustworthy.
+
+> **The model enables intent; the runtime enforces safety.**
+
+The routing backend is pluggable: local Von, hosted Jev, or a distilled local
+`treble-400m` checkpoint trained on these primitives (`EVALUATION.md` §11).
+
 **Status:** Implemented MVP — Milestones 1–2 complete, Milestone 5 half-complete, Milestones 3–4 pending (see §10)
 **Working name:** Treble
 **Primary implementation language:** Python (requires ≥ 3.11)
