@@ -357,9 +357,11 @@ git add .treble/procedures .gitignore && git commit   # share with the team
 - **Local distilled model.** A fine-tuned local checkpoint
   ([`Oscar-veeee/treble-400m`](https://huggingface.co/Oscar-veeee/treble-400m),
   ~3 GB) serves the same protocol. `./scripts/setup-model.sh` downloads it to
-  `~/.treble/models/treble-400m`; then serve it with
-  `VON_CHECKPOINT_DIR=~/.treble/models/treble-400m von serve`. Training and
-  evaluation live in the
+  `~/.treble/models/treble-400m`; add `--with-von` to also install `von-sdk`
+  into `~/.treble/venvs/von` (or reuse an existing venv with
+  `VON_VENV=/path/to/venv`), then serve it with
+  `VON_CHECKPOINT_DIR=~/.treble/models/treble-400m ~/.treble/venvs/von/bin/von serve`.
+  Training and evaluation live in the
   [`treble-distill`](https://github.com/OscarVGit/treble-distill) repo;
   `EVALUATION.md` §11 compares it with Von and Jev.
 - **Run `treble doctor`** to check the install, the Von endpoint and the

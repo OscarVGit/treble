@@ -1,0 +1,7 @@
+{
+  "profile": "weekly-report-production",
+  "workbook": "Weekly_Report.xlsm",
+  "worksheet": "WeeklyData",
+  "macro": "ThursdayWeeklyReport",
+  "regions": ["North", "South", "East", "West", "EMEA", "APAC"]
+}
