@@ -1,0 +1,11 @@
+# Demo-local Python environment
+.venv/
+
+# Treble runtime state (keep .treble/procedures/)
+.treble/events.jsonl
+.treble/audit.jsonl
+.treble/outcomes.jsonl
+.treble/von.log
+
+# Simulated report output
+output/

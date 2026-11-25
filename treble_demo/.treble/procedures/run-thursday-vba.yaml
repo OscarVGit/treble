@@ -1,0 +1,39 @@
+# Treble's registry is directory-based YAML, not a single registry.json.
+# This is the project-scope entry for the demo (simulation only, no writes).
+name: run-thursday-vba
+description: >-
+  Run the Thursday weekly-report Excel/VBA macro (ThursdayWeeklyReport).
+  Use this for requests like "run thursday vba", "execute weekly report
+  macro", "run thursda vba macro" (misspelled), or any request to run the
+  Thursday VBA report.
+executable: python3
+args:
+  - scripts/run_vba_macro.py
+  - --config-path
+  - config/weekly_report.json
+  - --target-date
+  - "2026-11-05"
+  - --macro-name
+  - ThursdayWeeklyReport
+  - --output-dir
+  - output/2026-11-05
+  - --verbose
+aliases:
+  - thursday-vba
+  - thursday-vba-macro
+  - thursda-vba
+  - run-thursda-vba
+  - weekly-report
+  - weekly-report-macro
+  - excel-weekly-report
+risk: read-only
+scope: project
+working_dir: .
+env_vars:
+  TZ: America/New_York
+verify:
+  expected_exit_code: 0
+  stdout_contains: "[SUCCESS] Macro 'ThursdayWeeklyReport' executed in 1.4s"
+provenance:
+  source: demo
+  approved: true

@@ -5,9 +5,11 @@ build/
 dist/
 *.egg-info/
 
-# Local Treble data: project registry, audit/outcome logs, Von server log.
+# Root project's local Treble data (registry, audit/outcome logs, Von log).
 # Example procedures shared with the repo live in procedures/examples/ instead.
-.treble/
+# Nested demo/project registries can be committed; ignore their runtime files
+# with a nested .gitignore (see treble_demo/.gitignore).
+/.treble/
 
 # Test / coverage output
 .coverage
